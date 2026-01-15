@@ -4,6 +4,7 @@ import { config } from "./config/env";
 import { connectDatabase } from "./config/database";
 import authRoutes from "./routes/auth.routes";
 import faucetRoutes from "./routes/faucet.routes";
+import finnhubRoutes from "./routes/finnhub.routes";
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.get("/health", (_req, res) => {
 // Routes
 app.use("/auth", authRoutes);
 app.use("/faucet", faucetRoutes);
+app.use("/finnhub", finnhubRoutes);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -51,6 +53,16 @@ Available endpoints:
     POST /faucet/lock            - Lock free balance
     POST /faucet/unlock          - Unlock locked balance
     GET  /faucet/global-stats    - Get global faucet stats (public)
+  
+  Finnhub (Market Data):
+    GET  /finnhub/quote/:symbol        - Get stock quote
+    GET  /finnhub/quotes?symbols=...   - Get multiple quotes
+    GET  /finnhub/profile/:symbol      - Get company profile
+    GET  /finnhub/financials/:symbol   - Get basic financials
+    GET  /finnhub/news/market          - Get market news
+    GET  /finnhub/news/company/:symbol - Get company news
+    GET  /finnhub/search?q=...         - Search symbols
+    GET  /finnhub/earnings             - Get earnings calendar
   
   Health:
     GET  /health           - Health check
