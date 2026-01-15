@@ -18,6 +18,9 @@ export interface ServerToClientEvents {
   "trade:executed": (data: TradeExecuted) => void;
   "trade:batch": (data: TradeExecuted[]) => void;
   
+  // Candle events
+  "candle:update": (data: CandleUpdate) => void;
+  
   // User-specific events
   "order:created": (data: OrderEvent) => void;
   "order:filled": (data: OrderEvent) => void;
@@ -30,8 +33,8 @@ export interface ServerToClientEvents {
   
   // System events
   "error": (data: { code: string; message: string }) => void;
-  "subscribed": (data: { channel: string; symbol?: string }) => void;
-  "unsubscribed": (data: { channel: string; symbol?: string }) => void;
+  "subscribed": (data: { channel: string; symbol?: string; interval?: string }) => void;
+  "unsubscribed": (data: { channel: string; symbol?: string; interval?: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -42,6 +45,8 @@ export interface ClientToServerEvents {
   "unsubscribe:orderbook": (symbol: string) => void;
   "subscribe:trades": (symbol: string) => void;
   "unsubscribe:trades": (symbol: string) => void;
+  "subscribe:candles": (data: { symbol: string; interval?: string } | string) => void;
+  "unsubscribe:candles": (data: { symbol: string; interval?: string } | string) => void;
 }
 
 export interface InterServerEvents {
@@ -242,9 +247,22 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
     });
 
     // Handle candle subscriptions
-    socket.on("subscribe:candles", (data: { symbol: string; interval: string }) => {
-      const symbol = data.symbol.toUpperCase();
-      const interval = data.interval || "1m";
+    socket.on("subscribe:candles", (data) => {
+      // Handle both object and string formats
+      let symbol: string;
+      let interval: string;
+      
+      if (typeof data === "string") {
+        symbol = data.toUpperCase();
+        interval = "1m";
+      } else if (data && data.symbol) {
+        symbol = data.symbol.toUpperCase();
+        interval = data.interval || "1m";
+      } else {
+        socket.emit("error", { code: "INVALID_REQUEST", message: "Invalid subscription: symbol is required" });
+        return;
+      }
+      
       const channel = `candles:${symbol}:${interval}`;
       socket.join(channel);
       addSubscription(channel, socket.id);
@@ -252,9 +270,21 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
       console.log(`📊 ${socket.id} subscribed to ${channel}`);
     });
 
-    socket.on("unsubscribe:candles", (data: { symbol: string; interval: string }) => {
-      const symbol = data.symbol.toUpperCase();
-      const interval = data.interval || "1m";
+    socket.on("unsubscribe:candles", (data) => {
+      let symbol: string;
+      let interval: string;
+      
+      if (typeof data === "string") {
+        symbol = data.toUpperCase();
+        interval = "1m";
+      } else if (data && data.symbol) {
+        symbol = data.symbol.toUpperCase();
+        interval = data.interval || "1m";
+      } else {
+        socket.emit("error", { code: "INVALID_REQUEST", message: "Invalid unsubscription: symbol is required" });
+        return;
+      }
+      
       const channel = `candles:${symbol}:${interval}`;
       socket.leave(channel);
       removeSubscription(channel, socket.id);

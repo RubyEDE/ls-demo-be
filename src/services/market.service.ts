@@ -111,7 +111,7 @@ const priceUpdateIntervals = new Map<string, NodeJS.Timeout>();
 /**
  * Start continuous price updates for a market
  */
-export function startPriceUpdates(marketSymbol: string, intervalMs: number = 5000): void {
+export function startPriceUpdates(marketSymbol: string, intervalMs: number = 15000): void {
   if (priceUpdateIntervals.has(marketSymbol)) return;
   
   console.log(`📈 Starting price updates for ${marketSymbol}`);
@@ -142,7 +142,7 @@ export function stopPriceUpdates(marketSymbol: string): void {
 /**
  * Start price updates for all active markets
  */
-export async function startAllPriceUpdates(intervalMs: number = 5000): Promise<void> {
+export async function startAllPriceUpdates(intervalMs: number = 15000): Promise<void> {
   const markets = await getActiveMarkets();
   
   for (const market of markets) {
@@ -154,7 +154,7 @@ export async function startAllPriceUpdates(intervalMs: number = 5000): Promise<v
  * Start price updates for required markets specifically
  * Ensures AAPL, GOOGL, MSFT always have price data
  */
-export async function startRequiredPriceUpdates(intervalMs: number = 5000): Promise<void> {
+export async function startRequiredPriceUpdates(intervalMs: number = 15000): Promise<void> {
   console.log("📈 Starting price updates for required markets...");
   
   for (const marketData of REQUIRED_MARKETS) {
