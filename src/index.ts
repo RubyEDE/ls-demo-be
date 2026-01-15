@@ -1,12 +1,19 @@
 import express from "express";
+import { createServer } from "http";
 import cors from "cors";
 import { config } from "./config/env";
 import { connectDatabase } from "./config/database";
 import authRoutes from "./routes/auth.routes";
 import faucetRoutes from "./routes/faucet.routes";
 import finnhubRoutes from "./routes/finnhub.routes";
+import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
+import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.service";
 
 const app = express();
+const httpServer = createServer(app);
+
+// Initialize WebSocket
+const io = initializeWebSocket(httpServer);
 
 // Middleware
 app.use(cors());
@@ -14,7 +21,14 @@ app.use(express.json());
 
 // Health check
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    websocket: {
+      activeChannels: getActiveChannels(),
+      pollingSymbols: getPollingSymbols(),
+    },
+  });
 });
 
 // Routes
@@ -35,8 +49,12 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 async function start() {
   await connectDatabase();
   
-  app.listen(config.port, () => {
+  // Start price feed manager for auto-polling
+  startPriceFeedManager();
+  
+  httpServer.listen(config.port, () => {
     console.log(`🚀 EVM Auth Server running on http://localhost:${config.port}`);
+    console.log(`📡 WebSocket server running on ws://localhost:${config.port}`);
     console.log(`
 Available endpoints:
   Auth:
@@ -64,8 +82,13 @@ Available endpoints:
     GET  /finnhub/search?q=...         - Search symbols
     GET  /finnhub/earnings             - Get earnings calendar
   
+  WebSocket Events:
+    subscribe:price <symbol>     - Subscribe to price updates
+    subscribe:orderbook <symbol> - Subscribe to order book
+    subscribe:trades <symbol>    - Subscribe to trade feed
+  
   Health:
-    GET  /health           - Health check
+    GET  /health           - Health check + WebSocket stats
     `);
   });
 }
