@@ -100,7 +100,7 @@ export interface OrderEvent {
   price?: number;
   quantity: number;
   filledQuantity: number;
-  status: "pending" | "partial" | "filled" | "cancelled";
+  status: "pending" | "open" | "partial" | "filled" | "cancelled";
   timestamp: number;
 }
 

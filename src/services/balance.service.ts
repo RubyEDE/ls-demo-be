@@ -224,3 +224,85 @@ export async function getBalanceHistory(
     .reverse()
     .slice(offset, offset + limit);
 }
+
+// ============ Address-based functions for CLOB ============
+
+/**
+ * Lock balance by address (for CLOB orders)
+ */
+export async function lockBalanceByAddress(
+  address: string,
+  amount: number,
+  reason: string,
+  referenceId?: string
+): Promise<BalanceOperationResult> {
+  if (amount <= 0) {
+    return { success: false, error: "Amount must be positive" };
+  }
+
+  const balance = await Balance.findOne({ address: address.toLowerCase() });
+  
+  if (!balance) {
+    return { success: false, error: "Balance not found" };
+  }
+  
+  if (balance.free < amount) {
+    return { success: false, error: "Insufficient free balance to lock" };
+  }
+  
+  const change: IBalanceChange = {
+    amount,
+    type: "lock",
+    reason,
+    timestamp: new Date(),
+    referenceId,
+  };
+  
+  balance.free -= amount;
+  balance.locked += amount;
+  balance.changes.push(change);
+  
+  await balance.save();
+  
+  return { success: true, balance };
+}
+
+/**
+ * Unlock balance by address (for CLOB orders)
+ */
+export async function unlockBalanceByAddress(
+  address: string,
+  amount: number,
+  reason: string,
+  referenceId?: string
+): Promise<BalanceOperationResult> {
+  if (amount <= 0) {
+    return { success: false, error: "Amount must be positive" };
+  }
+
+  const balance = await Balance.findOne({ address: address.toLowerCase() });
+  
+  if (!balance) {
+    return { success: false, error: "Balance not found" };
+  }
+  
+  if (balance.locked < amount) {
+    return { success: false, error: "Insufficient locked balance to unlock" };
+  }
+  
+  const change: IBalanceChange = {
+    amount,
+    type: "unlock",
+    reason,
+    timestamp: new Date(),
+    referenceId,
+  };
+  
+  balance.locked -= amount;
+  balance.free += amount;
+  balance.changes.push(change);
+  
+  await balance.save();
+  
+  return { success: true, balance };
+}

@@ -2,6 +2,9 @@ import { Response, NextFunction } from "express";
 import { verifyToken } from "../services/token.service";
 import { AuthenticatedRequest, ErrorResponse } from "../types";
 
+// Re-export for convenience
+export { AuthenticatedRequest } from "../types";
+
 export function authMiddleware(
   req: AuthenticatedRequest,
   res: Response<ErrorResponse>,

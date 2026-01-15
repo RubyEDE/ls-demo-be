@@ -6,8 +6,11 @@ import { connectDatabase } from "./config/database";
 import authRoutes from "./routes/auth.routes";
 import faucetRoutes from "./routes/faucet.routes";
 import finnhubRoutes from "./routes/finnhub.routes";
+import clobRoutes from "./routes/clob.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
 import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.service";
+import { initializeMarkets, startAllPriceUpdates } from "./services/market.service";
+import { startAllMarketMakers } from "./services/marketmaker.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -35,6 +38,7 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRoutes);
 app.use("/faucet", faucetRoutes);
 app.use("/finnhub", finnhubRoutes);
+app.use("/clob", clobRoutes);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -48,6 +52,18 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // Connect to database and start server
 async function start() {
   await connectDatabase();
+  
+  // Initialize perpetual markets
+  await initializeMarkets();
+  
+  // Start price updates for all markets (fetches from Finnhub)
+  await startAllPriceUpdates(5000); // Update every 5 seconds
+  
+  // Start market makers (synthetic liquidity)
+  // Wait a bit for initial prices to be fetched
+  setTimeout(async () => {
+    await startAllMarketMakers(5000); // Update liquidity every 5 seconds
+  }, 2000);
   
   // Start price feed manager for auto-polling
   startPriceFeedManager();
@@ -81,6 +97,17 @@ Available endpoints:
     GET  /finnhub/news/company/:symbol - Get company news
     GET  /finnhub/search?q=...         - Search symbols
     GET  /finnhub/earnings             - Get earnings calendar
+  
+  CLOB (Perpetuals Trading):
+    GET  /clob/markets              - Get all active markets
+    GET  /clob/markets/:symbol      - Get market details
+    GET  /clob/orderbook/:symbol    - Get order book
+    GET  /clob/trades/:symbol       - Get recent trades
+    POST /clob/orders               - Place order (auth required)
+    DELETE /clob/orders/:orderId    - Cancel order (auth required)
+    GET  /clob/orders               - Get open orders (auth required)
+    GET  /clob/orders/history       - Get order history (auth required)
+    GET  /clob/trades/history       - Get trade history (auth required)
   
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates
