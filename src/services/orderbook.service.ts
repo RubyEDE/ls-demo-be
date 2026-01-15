@@ -171,6 +171,29 @@ export function clearOrderBook(marketSymbol: string): void {
 }
 
 /**
+ * Rebuild order book from database (includes both user and synthetic orders)
+ * This preserves user orders when refreshing synthetic liquidity
+ */
+export async function rebuildOrderBook(marketSymbol: string): Promise<void> {
+  const symbol = marketSymbol.toUpperCase();
+  
+  // Clear existing in-memory book
+  clearOrderBook(symbol);
+  
+  // Load ALL open orders from DB (both user and synthetic)
+  const orders = await Order.find({
+    marketSymbol: symbol,
+    status: { $in: ["open", "partial"] },
+  });
+  
+  for (const order of orders) {
+    addToOrderBook(order);
+  }
+  
+  console.log(`📚 Rebuilt order book for ${symbol}: ${orders.length} orders (user + synthetic)`);
+}
+
+/**
  * Load order book from database
  */
 export async function loadOrderBookFromDB(marketSymbol: string): Promise<void> {

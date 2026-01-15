@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { Order, IOrder } from "../models/order.model";
 import { getMarket, getCachedPrice, roundToTickSize, roundToLotSize } from "./market.service";
-import { addToOrderBook, clearOrderBook, getOrderBookSnapshot, broadcastOrderBook } from "./orderbook.service";
+import { rebuildOrderBook, broadcastOrderBook } from "./orderbook.service";
 
 // Configuration for synthetic liquidity
 interface LiquidityConfig {
@@ -124,6 +124,7 @@ export async function generateSyntheticOrders(
 
 /**
  * Update synthetic liquidity for a market
+ * Preserves user orders while refreshing synthetic liquidity
  */
 export async function updateSyntheticLiquidity(
   marketSymbol: string,
@@ -138,26 +139,25 @@ export async function updateSyntheticLiquidity(
     return;
   }
   
-  // Remove old synthetic orders from DB
+  // Remove ONLY synthetic orders from DB (user orders are preserved)
   await Order.deleteMany({
     marketSymbol: symbol,
     isSynthetic: true,
   });
   
-  // Clear order book (we'll rebuild it)
-  clearOrderBook(symbol);
-  
   // Generate new synthetic orders
   const orders = await generateSyntheticOrders(symbol, price, config);
   
-  // Save to DB and add to order book
+  // Save synthetic orders to DB
   for (const order of orders) {
     await order.save();
-    addToOrderBook(order);
   }
   
   // Store reference
   syntheticOrders.set(symbol, orders);
+  
+  // Rebuild the entire order book from DB (includes both user and synthetic orders)
+  await rebuildOrderBook(symbol);
   
   // Broadcast updated order book
   broadcastOrderBook(symbol);

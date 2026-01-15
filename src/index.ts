@@ -59,7 +59,7 @@ async function start() {
   await initializeMarkets();
   
   // Start price updates for required markets (AAPL, GOOGL, MSFT)
-  await startRequiredPriceUpdates(15000); // Update every 15 seconds
+  await startRequiredPriceUpdates(10000); // Update every 15 seconds
   
   // Start market makers for required markets (AAPL, GOOGL, MSFT)
   // Uses retry logic to wait for price data

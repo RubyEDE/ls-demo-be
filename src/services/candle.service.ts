@@ -5,8 +5,9 @@ import { broadcastCandleUpdate } from "./websocket.service";
 // Perpetuals DEX - Market is always open 24/7
 // Synthetic candle variance settings
 const SYNTHETIC_MIN_CHANGE = 0.01;         // Minimum $0.01 change per tick
-const SYNTHETIC_VARIANCE_PERCENT = 0.001;  // 0.1% max variance per tick
-const SYNTHETIC_TREND_BIAS = 0.0002;       // Slight mean reversion bias
+const SYNTHETIC_VARIANCE_PERCENT = 0.0008; // 0.08% max variance per tick
+const SYNTHETIC_MAX_DRIFT = 0.003;         // Max 0.3% drift from oracle price
+const SYNTHETIC_MEAN_REVERSION = 0.3;      // Strong mean reversion (30% pull back per tick)
 
 // In-memory current candles (for real-time updates)
 interface CurrentCandle {
@@ -77,31 +78,47 @@ export function getMarketStatus(): {
 /**
  * Generate a synthetic price with small variance
  * Always produces a change (never stays flat)
+ * Anchored to oracle price - won't drift far from it
  */
-function generateSyntheticPrice(basePrice: number, previousClose?: number): number {
-  const currentPrice = previousClose || basePrice;
+function generateSyntheticPrice(oraclePrice: number, previousClose?: number): number {
+  const currentPrice = previousClose || oraclePrice;
   
-  // Random direction: up or down
-  const direction = Math.random() > 0.5 ? 1 : -1;
+  // Calculate how far we've drifted from oracle price
+  const driftFromOracle = (currentPrice - oraclePrice) / oraclePrice;
   
-  // Random magnitude between min change and variance percent
+  // If we've drifted too far, force price back towards oracle
+  if (Math.abs(driftFromOracle) > SYNTHETIC_MAX_DRIFT) {
+    // Strong correction - move 50% back towards oracle
+    const correction = (oraclePrice - currentPrice) * 0.5;
+    const newPrice = currentPrice + correction;
+    return Math.round(newPrice * 100) / 100;
+  }
+  
+  // Random direction - but bias towards oracle if drifted
+  let direction: number;
+  if (Math.abs(driftFromOracle) > SYNTHETIC_MAX_DRIFT * 0.5) {
+    // Bias direction back towards oracle (70% chance)
+    direction = driftFromOracle > 0 ? (Math.random() > 0.3 ? -1 : 1) : (Math.random() > 0.3 ? 1 : -1);
+  } else {
+    direction = Math.random() > 0.5 ? 1 : -1;
+  }
+  
+  // Random magnitude - small variance
   const percentChange = SYNTHETIC_MIN_CHANGE / currentPrice + Math.random() * SYNTHETIC_VARIANCE_PERCENT;
   
-  // Mean reversion towards base price if we've drifted too far
-  let meanReversion = 0;
-  if (previousClose && previousClose !== basePrice) {
-    const drift = (previousClose - basePrice) / basePrice;
-    // If drifted more than 1%, add stronger pull back
-    if (Math.abs(drift) > 0.01) {
-      meanReversion = -drift * SYNTHETIC_TREND_BIAS * 5;
-    } else {
-      meanReversion = -drift * SYNTHETIC_TREND_BIAS;
-    }
-  }
+  // Apply mean reversion towards oracle price
+  const meanReversion = -driftFromOracle * SYNTHETIC_MEAN_REVERSION;
   
   // Calculate new price
   const change = (direction * percentChange) + meanReversion;
   let newPrice = currentPrice * (1 + change);
+  
+  // Final check - hard cap at max drift from oracle
+  const finalDrift = (newPrice - oraclePrice) / oraclePrice;
+  if (Math.abs(finalDrift) > SYNTHETIC_MAX_DRIFT) {
+    // Clamp to max drift
+    newPrice = oraclePrice * (1 + (finalDrift > 0 ? SYNTHETIC_MAX_DRIFT : -SYNTHETIC_MAX_DRIFT));
+  }
   
   // Ensure minimum change of $0.01
   if (Math.abs(newPrice - currentPrice) < SYNTHETIC_MIN_CHANGE) {
@@ -115,14 +132,21 @@ function generateSyntheticPrice(basePrice: number, previousClose?: number): numb
 /**
  * Generate synthetic OHLC for a candle period
  * Ensures visible price movement in every candle
+ * Stays anchored to oracle price - won't drift far
  */
-function generateSyntheticOHLC(basePrice: number, previousClose?: number): {
+function generateSyntheticOHLC(oraclePrice: number, previousClose?: number): {
   open: number;
   high: number;
   low: number;
   close: number;
 } {
-  const startPrice = previousClose || basePrice;
+  // Start from previous close, but if it drifted too far, start from oracle
+  let startPrice = previousClose || oraclePrice;
+  const startDrift = Math.abs((startPrice - oraclePrice) / oraclePrice);
+  if (startDrift > SYNTHETIC_MAX_DRIFT) {
+    // Previous close drifted too far - reset closer to oracle
+    startPrice = oraclePrice * (1 + (startPrice > oraclePrice ? SYNTHETIC_MAX_DRIFT * 0.5 : -SYNTHETIC_MAX_DRIFT * 0.5));
+  }
   
   // Generate several price points within the candle
   const prices: number[] = [startPrice];
@@ -130,7 +154,7 @@ function generateSyntheticOHLC(basePrice: number, previousClose?: number): {
   
   // Simulate ~12 price ticks within a 1-minute candle
   for (let i = 0; i < 12; i++) {
-    current = generateSyntheticPrice(basePrice, current);
+    current = generateSyntheticPrice(oraclePrice, current);
     prices.push(current);
   }
   
@@ -139,14 +163,14 @@ function generateSyntheticOHLC(basePrice: number, previousClose?: number): {
   let low = Math.min(...prices);
   const close = prices[prices.length - 1];
   
-  // Ensure high is at least $0.01 above open
+  // Ensure high is at least $0.01 above open (but within limits)
   if (high <= open) {
-    high = open + SYNTHETIC_MIN_CHANGE;
+    high = Math.min(open + SYNTHETIC_MIN_CHANGE, oraclePrice * (1 + SYNTHETIC_MAX_DRIFT));
   }
   
-  // Ensure low is at least $0.01 below open
+  // Ensure low is at least $0.01 below open (but within limits)
   if (low >= open) {
-    low = open - SYNTHETIC_MIN_CHANGE;
+    low = Math.max(open - SYNTHETIC_MIN_CHANGE, oraclePrice * (1 - SYNTHETIC_MAX_DRIFT));
   }
   
   // Ensure there's always a wick (high > max(open,close) and low < min(open,close))
@@ -154,10 +178,10 @@ function generateSyntheticOHLC(basePrice: number, previousClose?: number): {
   const minOC = Math.min(open, close);
   
   if (high <= maxOC) {
-    high = maxOC + SYNTHETIC_MIN_CHANGE + (Math.random() * 0.05);
+    high = Math.min(maxOC + SYNTHETIC_MIN_CHANGE + (Math.random() * 0.03), oraclePrice * (1 + SYNTHETIC_MAX_DRIFT));
   }
   if (low >= minOC) {
-    low = minOC - SYNTHETIC_MIN_CHANGE - (Math.random() * 0.05);
+    low = Math.max(minOC - SYNTHETIC_MIN_CHANGE - (Math.random() * 0.03), oraclePrice * (1 - SYNTHETIC_MAX_DRIFT));
   }
   
   return {
@@ -171,6 +195,7 @@ function generateSyntheticOHLC(basePrice: number, previousClose?: number): {
 /**
  * Update candle with a new price tick
  * Always adds small variance to create realistic price movement
+ * Anchored to oracle price - synthetic movement won't drift far
  */
 export async function updateCandle(
   marketSymbol: string,
@@ -182,6 +207,9 @@ export async function updateCandle(
   const symbol = marketSymbol.toUpperCase();
   const now = new Date();
   
+  // The oracle price is our anchor - synthetic prices stay close to it
+  const oraclePrice = getCachedPrice(symbol) || price;
+  
   // Get the last price we used for this symbol
   const lastPrice = lastKnownPrices.get(symbol);
   
@@ -191,8 +219,9 @@ export async function updateCandle(
   
   if (lastPrice) {
     // If price is exactly the same as last time, generate synthetic movement
+    // Use oracle price as anchor to prevent drift
     if (Math.abs(price - lastPrice) < 0.01) {
-      adjustedPrice = generateSyntheticPrice(price, lastPrice);
+      adjustedPrice = generateSyntheticPrice(oraclePrice, lastPrice);
     } else {
       // Real price change - still add tiny variance for realism
       const microVariance = (Math.random() - 0.5) * 0.02; // +/- $0.01
