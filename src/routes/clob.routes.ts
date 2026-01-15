@@ -12,6 +12,14 @@ import {
   getUserTradeHistory,
   getRecentTrades 
 } from "../services/order.service";
+import {
+  getUserPositions,
+  getPositionHistory,
+  getPositionSummary,
+  getOpenPosition,
+  closePosition,
+  calculateUnrealizedPnl,
+} from "../services/position.service";
 
 const router = Router();
 
@@ -391,6 +399,227 @@ router.get("/trades/history", authMiddleware, async (req: Request, res: Response
   } catch (error) {
     console.error("Error fetching trade history:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch trade history" });
+  }
+});
+
+// ============ Position Routes ============
+
+/**
+ * GET /clob/positions
+ * Get user's open positions
+ */
+router.get("/positions", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const positions = await getUserPositions(authReq.auth!.address);
+    
+    res.json({
+      positions: positions.map((p) => {
+        const currentPrice = getCachedPrice(p.marketSymbol);
+        return {
+          positionId: p.positionId,
+          marketSymbol: p.marketSymbol,
+          side: p.side,
+          size: p.size,
+          entryPrice: p.entryPrice,
+          markPrice: currentPrice,
+          margin: p.margin,
+          leverage: p.leverage,
+          unrealizedPnl: currentPrice ? calculateUnrealizedPnl(p, currentPrice) : p.unrealizedPnl,
+          realizedPnl: p.realizedPnl,
+          liquidationPrice: p.liquidationPrice,
+          status: p.status,
+          openedAt: p.openedAt,
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Error fetching positions:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch positions" });
+  }
+});
+
+/**
+ * GET /clob/positions/summary
+ * Get user's position summary (total PnL, margin, etc.)
+ */
+router.get("/positions/summary", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const summary = await getPositionSummary(authReq.auth!.address);
+    
+    res.json({
+      totalPositions: summary.totalPositions,
+      totalMargin: summary.totalMargin,
+      totalUnrealizedPnl: summary.totalUnrealizedPnl,
+      totalRealizedPnl: summary.totalRealizedPnl,
+      totalEquity: summary.totalMargin + summary.totalUnrealizedPnl,
+    });
+  } catch (error) {
+    console.error("Error fetching position summary:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch position summary" });
+  }
+});
+
+/**
+ * GET /clob/positions/history
+ * Get user's closed position history
+ * NOTE: Must be before /positions/:marketSymbol to avoid route conflict
+ */
+router.get("/positions/history", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const marketSymbol = req.query.market as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    
+    const positions = await getPositionHistory(authReq.auth!.address, marketSymbol, limit, offset);
+    
+    res.json({
+      positions: positions.map((p) => ({
+        positionId: p.positionId,
+        marketSymbol: p.marketSymbol,
+        side: p.side,
+        size: p.size,
+        entryPrice: p.entryPrice,
+        margin: p.margin,
+        realizedPnl: p.realizedPnl,
+        totalFeesPaid: p.totalFeesPaid,
+        accumulatedFunding: p.accumulatedFunding,
+        status: p.status,
+        openedAt: p.openedAt,
+        closedAt: p.closedAt,
+      })),
+      pagination: {
+        limit,
+        offset,
+        hasMore: positions.length === limit,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching position history:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch position history" });
+  }
+});
+
+/**
+ * GET /clob/positions/:marketSymbol
+ * Get user's position for a specific market
+ */
+router.get("/positions/:marketSymbol", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const marketSymbol = req.params.marketSymbol as string;
+    
+    const market = await getMarket(marketSymbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const position = await getOpenPosition(authReq.auth!.address, marketSymbol);
+    
+    if (!position) {
+      return res.json({ position: null });
+    }
+    
+    const currentPrice = getCachedPrice(marketSymbol);
+    
+    res.json({
+      position: {
+        positionId: position.positionId,
+        marketSymbol: position.marketSymbol,
+        side: position.side,
+        size: position.size,
+        entryPrice: position.entryPrice,
+        markPrice: currentPrice,
+        margin: position.margin,
+        leverage: position.leverage,
+        unrealizedPnl: currentPrice ? calculateUnrealizedPnl(position, currentPrice) : position.unrealizedPnl,
+        realizedPnl: position.realizedPnl,
+        liquidationPrice: position.liquidationPrice,
+        accumulatedFunding: position.accumulatedFunding,
+        totalFeesPaid: position.totalFeesPaid,
+        status: position.status,
+        openedAt: position.openedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching position:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch position" });
+  }
+});
+
+/**
+ * POST /clob/positions/:marketSymbol/close
+ * Close a position (market order to close)
+ */
+router.post("/positions/:marketSymbol/close", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const marketSymbol = req.params.marketSymbol as string;
+    const { quantity } = req.body; // Optional: partial close
+    
+    const position = await getOpenPosition(authReq.auth!.address, marketSymbol);
+    
+    if (!position) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "No open position in this market" });
+    }
+    
+    // Get current price for market close
+    const currentPrice = getCachedPrice(marketSymbol);
+    if (!currentPrice) {
+      return res.status(400).json({ error: "NO_PRICE", message: "No price available for market" });
+    }
+    
+    // Determine close quantity
+    const closeQty = quantity && quantity < position.size ? quantity : position.size;
+    
+    // Place a market order to close
+    const closeSide = position.side === "long" ? "sell" : "buy";
+    
+    const result = await placeOrder({
+      marketSymbol,
+      userAddress: authReq.auth!.address,
+      side: closeSide,
+      type: "market",
+      quantity: closeQty,
+      reduceOnly: true,
+    });
+    
+    if (!result.success) {
+      return res.status(400).json({
+        error: "CLOSE_FAILED",
+        message: result.error,
+      });
+    }
+    
+    // Refetch position to get updated state
+    const updatedPosition = await getOpenPosition(authReq.auth!.address, marketSymbol);
+    
+    res.json({
+      success: true,
+      closedQuantity: closeQty,
+      order: result.order ? {
+        orderId: result.order.orderId,
+        averagePrice: result.order.averagePrice,
+        status: result.order.status,
+      } : null,
+      position: updatedPosition ? {
+        positionId: updatedPosition.positionId,
+        side: updatedPosition.side,
+        size: updatedPosition.size,
+        realizedPnl: updatedPosition.realizedPnl,
+        status: updatedPosition.status,
+      } : null,
+    });
+  } catch (error) {
+    console.error("Error closing position:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to close position" });
   }
 });
 

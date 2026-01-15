@@ -12,6 +12,7 @@
     "test:finnhub": "tsx src/test/finnhub.test.ts",
     "test:websocket": "tsx src/test/websocket.test.ts",
     "test:clob": "tsx src/test/clob.test.ts",
+    "test:position": "tsx src/test/position.test.ts",
     "test": "tsx src/test/auth.test.ts && tsx src/test/faucet.test.ts && tsx src/test/finnhub.test.ts"
   },
   "keywords": [

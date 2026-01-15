@@ -23,6 +23,10 @@ export interface ServerToClientEvents {
   "order:filled": (data: OrderEvent) => void;
   "order:cancelled": (data: OrderEvent) => void;
   "balance:updated": (data: BalanceUpdate) => void;
+  "position:updated": (data: PositionUpdate) => void;
+  "position:opened": (data: PositionUpdate) => void;
+  "position:closed": (data: PositionUpdate) => void;
+  "position:liquidated": (data: PositionUpdate) => void;
   
   // System events
   "error": (data: { code: string; message: string }) => void;
@@ -108,6 +112,22 @@ export interface BalanceUpdate {
   free: number;
   locked: number;
   total: number;
+  timestamp: number;
+}
+
+export interface PositionUpdate {
+  positionId: string;
+  marketSymbol: string;
+  side: "long" | "short";
+  size: number;
+  entryPrice: number;
+  markPrice: number;
+  margin: number;
+  leverage: number;
+  unrealizedPnl: number;
+  realizedPnl: number;
+  liquidationPrice: number;
+  status: "open" | "closed" | "liquidated";
   timestamp: number;
 }
 
@@ -302,6 +322,35 @@ export function sendOrderUpdate(
 export function sendBalanceUpdate(userAddress: string, data: BalanceUpdate): void {
   if (!io) return;
   io.to(`user:${userAddress.toLowerCase()}`).emit("balance:updated", data);
+}
+
+/**
+ * Send user-specific position update
+ */
+export function sendPositionUpdate(userAddress: string, data: PositionUpdate): void {
+  if (!io) return;
+  
+  const room = `user:${userAddress.toLowerCase()}`;
+  
+  // Send appropriate event based on status
+  if (data.status === "closed") {
+    io.to(room).emit("position:closed", data);
+  } else if (data.status === "liquidated") {
+    io.to(room).emit("position:liquidated", data);
+  } else if (data.size > 0) {
+    io.to(room).emit("position:updated", data);
+  }
+  
+  // Always send the general update
+  io.to(room).emit("position:updated", data);
+}
+
+/**
+ * Send position opened event
+ */
+export function sendPositionOpened(userAddress: string, data: PositionUpdate): void {
+  if (!io) return;
+  io.to(`user:${userAddress.toLowerCase()}`).emit("position:opened", data);
 }
 
 /**

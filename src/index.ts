@@ -109,6 +109,13 @@ Available endpoints:
     GET  /clob/orders/history       - Get order history (auth required)
     GET  /clob/trades/history       - Get trade history (auth required)
   
+  Positions:
+    GET  /clob/positions            - Get all open positions (auth required)
+    GET  /clob/positions/summary    - Get position summary (auth required)
+    GET  /clob/positions/:symbol    - Get position for market (auth required)
+    POST /clob/positions/:symbol/close - Close position (auth required)
+    GET  /clob/positions/history    - Get closed positions (auth required)
+  
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates
     subscribe:orderbook <symbol> - Subscribe to order book

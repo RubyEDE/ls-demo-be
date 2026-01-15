@@ -14,6 +14,7 @@ import {
   sendBalanceUpdate 
 } from "./websocket.service";
 import { lockBalanceByAddress, unlockBalanceByAddress } from "./balance.service";
+import { handleTradeExecution } from "./position.service";
 
 interface PlaceOrderParams {
   marketSymbol: string;
@@ -291,6 +292,24 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
         side: trade.side,
         timestamp: Date.now(),
       });
+      
+      // Handle position update for taker (if not synthetic)
+      if (order.userAddress && !order.isSynthetic) {
+        const market = await getMarket(order.marketSymbol);
+        if (market) {
+          // Calculate margin used for this fill
+          const fillMargin = makerOrder.price * fillQty * market.initialMarginRate;
+          
+          await handleTradeExecution(
+            order.userAddress,
+            order.marketSymbol,
+            order.side,
+            fillQty,
+            makerOrder.price,
+            fillMargin
+          );
+        }
+      }
       
       // Notify maker if not synthetic
       if (makerOrder.userAddress && !makerOrder.isSynthetic) {

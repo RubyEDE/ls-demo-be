@@ -306,3 +306,89 @@ export async function unlockBalanceByAddress(
   
   return { success: true, balance };
 }
+
+/**
+ * Credit balance by address (for PnL settlements)
+ */
+export async function creditBalanceByAddress(
+  address: string,
+  amount: number,
+  reason: string,
+  referenceId?: string
+): Promise<BalanceOperationResult> {
+  if (amount <= 0) {
+    return { success: false, error: "Amount must be positive" };
+  }
+
+  const balance = await Balance.findOne({ address: address.toLowerCase() });
+  
+  if (!balance) {
+    return { success: false, error: "Balance not found" };
+  }
+  
+  const change: IBalanceChange = {
+    amount,
+    type: "credit",
+    reason,
+    timestamp: new Date(),
+    referenceId,
+  };
+  
+  balance.free += amount;
+  balance.totalCredits += amount;
+  balance.changes.push(change);
+  
+  await balance.save();
+  
+  return { success: true, balance };
+}
+
+/**
+ * Debit balance by address (for losses)
+ */
+export async function debitBalanceByAddress(
+  address: string,
+  amount: number,
+  reason: string,
+  referenceId?: string
+): Promise<BalanceOperationResult> {
+  if (amount <= 0) {
+    return { success: false, error: "Amount must be positive" };
+  }
+
+  const balance = await Balance.findOne({ address: address.toLowerCase() });
+  
+  if (!balance) {
+    return { success: false, error: "Balance not found" };
+  }
+  
+  // Can debit from either free or locked
+  const totalAvailable = balance.free + balance.locked;
+  if (totalAvailable < amount) {
+    return { success: false, error: "Insufficient balance" };
+  }
+  
+  const change: IBalanceChange = {
+    amount,
+    type: "debit",
+    reason,
+    timestamp: new Date(),
+    referenceId,
+  };
+  
+  // First debit from locked, then from free
+  if (balance.locked >= amount) {
+    balance.locked -= amount;
+  } else {
+    const remaining = amount - balance.locked;
+    balance.locked = 0;
+    balance.free -= remaining;
+  }
+  
+  balance.totalDebits += amount;
+  balance.changes.push(change);
+  
+  await balance.save();
+  
+  return { success: true, balance };
+}
