@@ -5,9 +5,9 @@ import { broadcastCandleUpdate } from "./websocket.service";
 // Perpetuals DEX - Market is always open 24/7
 // Synthetic candle variance settings
 const SYNTHETIC_MIN_CHANGE = 0.01;         // Minimum $0.01 change per tick
-const SYNTHETIC_VARIANCE_PERCENT = 0.0008; // 0.08% max variance per tick
-const SYNTHETIC_MAX_DRIFT = 0.003;         // Max 0.3% drift from oracle price
-const SYNTHETIC_MEAN_REVERSION = 0.3;      // Strong mean reversion (30% pull back per tick)
+const SYNTHETIC_VARIANCE_PERCENT = 0.002;  // 0.2% max variance per tick
+const SYNTHETIC_MAX_DRIFT = 0.015;         // Max 1.5% drift from oracle price
+const SYNTHETIC_MEAN_REVERSION = 0.1;      // Mean reversion (10% pull back per tick)
 
 // In-memory current candles (for real-time updates)
 interface CurrentCandle {
@@ -94,11 +94,11 @@ function generateSyntheticPrice(oraclePrice: number, previousClose?: number): nu
     return Math.round(newPrice * 100) / 100;
   }
   
-  // Random direction - but bias towards oracle if drifted
+  // Random direction - but bias towards oracle if drifted past 1%
   let direction: number;
-  if (Math.abs(driftFromOracle) > SYNTHETIC_MAX_DRIFT * 0.5) {
-    // Bias direction back towards oracle (70% chance)
-    direction = driftFromOracle > 0 ? (Math.random() > 0.3 ? -1 : 1) : (Math.random() > 0.3 ? 1 : -1);
+  if (Math.abs(driftFromOracle) > 0.01) {
+    // Bias direction back towards oracle (60% chance)
+    direction = driftFromOracle > 0 ? (Math.random() > 0.4 ? -1 : 1) : (Math.random() > 0.4 ? 1 : -1);
   } else {
     direction = Math.random() > 0.5 ? 1 : -1;
   }
@@ -144,8 +144,8 @@ function generateSyntheticOHLC(oraclePrice: number, previousClose?: number): {
   let startPrice = previousClose || oraclePrice;
   const startDrift = Math.abs((startPrice - oraclePrice) / oraclePrice);
   if (startDrift > SYNTHETIC_MAX_DRIFT) {
-    // Previous close drifted too far - reset closer to oracle
-    startPrice = oraclePrice * (1 + (startPrice > oraclePrice ? SYNTHETIC_MAX_DRIFT * 0.5 : -SYNTHETIC_MAX_DRIFT * 0.5));
+    // Previous close drifted too far - reset closer to oracle (within 1% range)
+    startPrice = oraclePrice * (1 + (startPrice > oraclePrice ? 0.01 : -0.01));
   }
   
   // Generate several price points within the candle
