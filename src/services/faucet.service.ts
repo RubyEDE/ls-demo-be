@@ -1,0 +1,180 @@
+import { Types } from "mongoose";
+import { FaucetRequest, IFaucetRequest } from "../models/faucet-request.model";
+import { creditBalance, getOrCreateBalance } from "./balance.service";
+import { IBalance } from "../models/balance.model";
+
+// Faucet configuration
+const FAUCET_AMOUNT = 100; // Amount given per request
+const COOLDOWN_HOURS = 24; // Hours between requests
+
+export interface FaucetRequestResult {
+  success: boolean;
+  amount?: number;
+  balance?: IBalance;
+  nextRequestAt?: Date;
+  error?: string;
+}
+
+export interface FaucetStats {
+  totalRequests: number;
+  totalAmountDistributed: number;
+  lastRequestAt: Date | null;
+  nextRequestAt: Date | null;
+  canRequest: boolean;
+}
+
+/**
+ * Get the start of today (for daily limit checks)
+ */
+function getCooldownStartTime(): Date {
+  const now = new Date();
+  return new Date(now.getTime() - COOLDOWN_HOURS * 60 * 60 * 1000);
+}
+
+/**
+ * Check if user can request from faucet
+ */
+export async function canRequestFromFaucet(
+  userId: Types.ObjectId
+): Promise<{ canRequest: boolean; nextRequestAt: Date | null; lastRequest: IFaucetRequest | null }> {
+  const cooldownStart = getCooldownStartTime();
+  
+  const lastRequest = await FaucetRequest.findOne({
+    userId,
+    createdAt: { $gte: cooldownStart },
+  }).sort({ createdAt: -1 });
+  
+  if (lastRequest) {
+    const nextRequestAt = new Date(
+      lastRequest.createdAt.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000
+    );
+    return { canRequest: false, nextRequestAt, lastRequest };
+  }
+  
+  // Get last request ever for stats
+  const lastRequestEver = await FaucetRequest.findOne({ userId }).sort({
+    createdAt: -1,
+  });
+  
+  return { canRequest: true, nextRequestAt: null, lastRequest: lastRequestEver };
+}
+
+/**
+ * Request tokens from the faucet
+ */
+export async function requestFromFaucet(
+  userId: Types.ObjectId,
+  address: string,
+  ipAddress?: string,
+  userAgent?: string
+): Promise<FaucetRequestResult> {
+  const { canRequest, nextRequestAt } = await canRequestFromFaucet(userId);
+  
+  if (!canRequest) {
+    return {
+      success: false,
+      nextRequestAt: nextRequestAt!,
+      error: `You can only request once every ${COOLDOWN_HOURS} hours`,
+    };
+  }
+  
+  // Ensure balance exists
+  await getOrCreateBalance(userId, address);
+  
+  // Credit the balance
+  const creditResult = await creditBalance(
+    userId,
+    address,
+    FAUCET_AMOUNT,
+    "Faucet request",
+    `faucet_${Date.now()}`
+  );
+  
+  if (!creditResult.success) {
+    return {
+      success: false,
+      error: creditResult.error,
+    };
+  }
+  
+  // Record the faucet request
+  await FaucetRequest.create({
+    userId,
+    address: address.toLowerCase(),
+    amount: FAUCET_AMOUNT,
+    ipAddress,
+    userAgent,
+  });
+  
+  // Calculate next available request time
+  const newNextRequestAt = new Date(Date.now() + COOLDOWN_HOURS * 60 * 60 * 1000);
+  
+  return {
+    success: true,
+    amount: FAUCET_AMOUNT,
+    balance: creditResult.balance,
+    nextRequestAt: newNextRequestAt,
+  };
+}
+
+/**
+ * Get faucet statistics for a user
+ */
+export async function getFaucetStats(userId: Types.ObjectId): Promise<FaucetStats> {
+  const [totalRequests, totalAmountResult, { canRequest, nextRequestAt, lastRequest }] =
+    await Promise.all([
+      FaucetRequest.countDocuments({ userId }),
+      FaucetRequest.aggregate([
+        { $match: { userId } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      canRequestFromFaucet(userId),
+    ]);
+  
+  const totalAmountDistributed = totalAmountResult[0]?.total || 0;
+  
+  return {
+    totalRequests,
+    totalAmountDistributed,
+    lastRequestAt: lastRequest?.createdAt || null,
+    nextRequestAt,
+    canRequest,
+  };
+}
+
+/**
+ * Get faucet request history for a user
+ */
+export async function getFaucetHistory(
+  userId: Types.ObjectId,
+  limit: number = 50,
+  offset: number = 0
+): Promise<IFaucetRequest[]> {
+  return FaucetRequest.find({ userId })
+    .sort({ createdAt: -1 })
+    .skip(offset)
+    .limit(limit);
+}
+
+/**
+ * Get global faucet statistics
+ */
+export async function getGlobalFaucetStats(): Promise<{
+  totalRequests: number;
+  totalAmountDistributed: number;
+  uniqueUsers: number;
+}> {
+  const [totalRequests, totalAmountResult, uniqueUsers] = await Promise.all([
+    FaucetRequest.countDocuments(),
+    FaucetRequest.aggregate([
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]),
+    FaucetRequest.distinct("userId").then((ids) => ids.length),
+  ]);
+  
+  return {
+    totalRequests,
+    totalAmountDistributed: totalAmountResult[0]?.total || 0,
+    uniqueUsers,
+  };
+}
