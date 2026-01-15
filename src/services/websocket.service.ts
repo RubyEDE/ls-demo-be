@@ -96,6 +96,19 @@ export interface TradeExecuted {
   timestamp: number;
 }
 
+export interface CandleUpdate {
+  symbol: string;
+  interval: string;
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  trades: number;
+  isClosed: boolean;
+}
+
 export interface OrderEvent {
   orderId: string;
   symbol: string;
@@ -228,6 +241,26 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
       socket.emit("unsubscribed", { channel: "trades", symbol: symbol.toUpperCase() });
     });
 
+    // Handle candle subscriptions
+    socket.on("subscribe:candles", (data: { symbol: string; interval: string }) => {
+      const symbol = data.symbol.toUpperCase();
+      const interval = data.interval || "1m";
+      const channel = `candles:${symbol}:${interval}`;
+      socket.join(channel);
+      addSubscription(channel, socket.id);
+      socket.emit("subscribed", { channel: "candles", symbol, interval });
+      console.log(`📊 ${socket.id} subscribed to ${channel}`);
+    });
+
+    socket.on("unsubscribe:candles", (data: { symbol: string; interval: string }) => {
+      const symbol = data.symbol.toUpperCase();
+      const interval = data.interval || "1m";
+      const channel = `candles:${symbol}:${interval}`;
+      socket.leave(channel);
+      removeSubscription(channel, socket.id);
+      socket.emit("unsubscribed", { channel: "candles", symbol, interval });
+    });
+
     // Handle disconnection
     socket.on("disconnect", (reason) => {
       console.log(`📡 WebSocket disconnected: ${socket.id} (${reason})`);
@@ -302,6 +335,15 @@ export function broadcastOrderBookUpdate(symbol: string, data: OrderBookUpdate):
 export function broadcastTradeExecuted(symbol: string, data: TradeExecuted): void {
   if (!io) return;
   io.to(`trades:${symbol.toUpperCase()}`).emit("trade:executed", data);
+}
+
+/**
+ * Broadcast candle update
+ */
+export function broadcastCandleUpdate(symbol: string, data: CandleUpdate): void {
+  if (!io) return;
+  const channel = `candles:${symbol.toUpperCase()}:${data.interval}`;
+  io.to(channel).emit("candle:update", data);
 }
 
 /**

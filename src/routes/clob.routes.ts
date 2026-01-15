@@ -20,6 +20,13 @@ import {
   closePosition,
   calculateUnrealizedPnl,
 } from "../services/position.service";
+import {
+  getCandles,
+  getCurrentCandle,
+  hasEnoughCandles,
+  getMarketStatus,
+} from "../services/candle.service";
+import { CandleInterval } from "../models/candle.model";
 
 const router = Router();
 
@@ -620,6 +627,120 @@ router.post("/positions/:marketSymbol/close", authMiddleware, async (req: Reques
   } catch (error) {
     console.error("Error closing position:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to close position" });
+  }
+});
+
+// ============ Candle Routes ============
+
+/**
+ * GET /clob/market-status
+ * Get current market status (open/closed, times)
+ */
+router.get("/market-status", (_req: Request, res: Response) => {
+  const status = getMarketStatus();
+  res.json(status);
+});
+
+/**
+ * GET /clob/candles/:symbol
+ * Get candle data for a market
+ * Query params: interval (1m, 5m, 15m, 1h, 4h, 1d), limit (default 100)
+ */
+router.get("/candles/:symbol", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const interval = (req.query.interval as CandleInterval) || "1m";
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    
+    // Validate interval
+    const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+    if (!validIntervals.includes(interval)) {
+      return res.status(400).json({
+        error: "INVALID_INTERVAL",
+        message: `Invalid interval. Must be one of: ${validIntervals.join(", ")}`,
+      });
+    }
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    // Get historical candles
+    const candles = await getCandles(market.symbol, interval, limit);
+    
+    // Get current (live) candle
+    const currentCandle = getCurrentCandle(market.symbol, interval);
+    
+    // Check if we have enough data
+    const check = await hasEnoughCandles(market.symbol, interval, 50);
+    
+    res.json({
+      symbol: market.symbol,
+      interval,
+      marketStatus: getMarketStatus(),
+      candles: candles.map((c) => ({
+        timestamp: c.timestamp.getTime(),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+        trades: c.trades,
+        isClosed: c.isClosed,
+        isMarketOpen: c.isMarketOpen,
+      })),
+      currentCandle: currentCandle ? {
+        timestamp: currentCandle.timestamp.getTime(),
+        open: currentCandle.open,
+        high: currentCandle.high,
+        low: currentCandle.low,
+        close: currentCandle.close,
+        volume: currentCandle.volume,
+        trades: currentCandle.trades,
+        isClosed: false,
+      } : null,
+      meta: {
+        count: candles.length,
+        hasEnoughData: check.hasEnough,
+        available: check.count,
+        required: check.required,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching candles:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch candles" });
+  }
+});
+
+/**
+ * GET /clob/candles/:symbol/status
+ * Check if we have enough candle data for charting
+ */
+router.get("/candles/:symbol/status", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+    const status: Record<string, { hasEnough: boolean; count: number; required: number }> = {};
+    
+    for (const interval of intervals) {
+      status[interval] = await hasEnoughCandles(market.symbol, interval, 50);
+    }
+    
+    res.json({
+      symbol: market.symbol,
+      marketStatus: getMarketStatus(),
+      intervals: status,
+    });
+  } catch (error) {
+    console.error("Error checking candle status:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to check candle status" });
   }
 });
 

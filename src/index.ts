@@ -9,8 +9,9 @@ import finnhubRoutes from "./routes/finnhub.routes";
 import clobRoutes from "./routes/clob.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
 import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.service";
-import { initializeMarkets, startAllPriceUpdates } from "./services/market.service";
-import { startAllMarketMakers } from "./services/marketmaker.service";
+import { initializeMarkets, startRequiredPriceUpdates } from "./services/market.service";
+import { startRequiredMarketMakers } from "./services/marketmaker.service";
+import { initializeCandles, getMarketStatus } from "./services/candle.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -27,6 +28,7 @@ app.get("/health", (_req, res) => {
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
+    market: getMarketStatus(),
     websocket: {
       activeChannels: getActiveChannels(),
       pollingSymbols: getPollingSymbols(),
@@ -56,14 +58,19 @@ async function start() {
   // Initialize perpetual markets
   await initializeMarkets();
   
-  // Start price updates for all markets (fetches from Finnhub)
-  await startAllPriceUpdates(5000); // Update every 5 seconds
+  // Start price updates for required markets (AAPL, GOOGL, MSFT)
+  await startRequiredPriceUpdates(5000); // Update every 5 seconds
   
-  // Start market makers (synthetic liquidity)
-  // Wait a bit for initial prices to be fetched
+  // Start market makers for required markets (AAPL, GOOGL, MSFT)
+  // Uses retry logic to wait for price data
   setTimeout(async () => {
-    await startAllMarketMakers(5000); // Update liquidity every 5 seconds
-  }, 2000);
+    await startRequiredMarketMakers(500); // Update liquidity every 5 seconds
+  }, 3000);
+  
+  // Initialize candle data (backfill if needed, start generator)
+  setTimeout(async () => {
+    await initializeCandles();
+  }, 5000);
   
   // Start price feed manager for auto-polling
   startPriceFeedManager();
@@ -91,6 +98,7 @@ Available endpoints:
   Finnhub (Market Data):
     GET  /finnhub/quote/:symbol        - Get stock quote
     GET  /finnhub/quotes?symbols=...   - Get multiple quotes
+    GET  /finnhub/candles/:symbol      - Get OHLCV candles (?interval=1m&limit=100)
     GET  /finnhub/profile/:symbol      - Get company profile
     GET  /finnhub/financials/:symbol   - Get basic financials
     GET  /finnhub/news/market          - Get market news
@@ -116,13 +124,19 @@ Available endpoints:
     POST /clob/positions/:symbol/close - Close position (auth required)
     GET  /clob/positions/history    - Get closed positions (auth required)
   
+  Candles (Price Charts):
+    GET  /clob/market-status         - Get market open/closed status
+    GET  /clob/candles/:symbol       - Get candle data (?interval=1m&limit=100)
+    GET  /clob/candles/:symbol/status - Check if enough candle data exists
+  
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates
     subscribe:orderbook <symbol> - Subscribe to order book
     subscribe:trades <symbol>    - Subscribe to trade feed
+    subscribe:candles {symbol, interval} - Subscribe to candle updates
   
   Health:
-    GET  /health           - Health check + WebSocket stats
+    GET  /health           - Health check + market status
     `);
   });
 }

@@ -84,22 +84,8 @@ MarketSchema.index({ status: 1 });
 
 export const Market = mongoose.model<IMarket>("Market", MarketSchema);
 
-// Seed data for initial markets
-export const INITIAL_MARKETS = [
-  {
-    symbol: "SP500-PERP",
-    name: "S&P 500 Perpetual",
-    baseAsset: "SP500",
-    quoteAsset: "USD",
-    finnhubSymbol: "SPY",  // SPY ETF tracks S&P 500
-    tickSize: 0.01,
-    lotSize: 0.01,
-    minOrderSize: 0.01,
-    maxOrderSize: 100,
-    maxLeverage: 20,
-    initialMarginRate: 0.05,
-    maintenanceMarginRate: 0.025,
-  },
+// Required markets - always ensure these exist on startup
+export const REQUIRED_MARKETS = [
   {
     symbol: "AAPL-PERP",
     name: "Apple Perpetual",
@@ -115,11 +101,25 @@ export const INITIAL_MARKETS = [
     maintenanceMarginRate: 0.05,
   },
   {
-    symbol: "TSLA-PERP",
-    name: "Tesla Perpetual",
-    baseAsset: "TSLA",
+    symbol: "GOOGL-PERP",
+    name: "Alphabet Perpetual",
+    baseAsset: "GOOGL",
     quoteAsset: "USD",
-    finnhubSymbol: "TSLA",
+    finnhubSymbol: "GOOGL",
+    tickSize: 0.01,
+    lotSize: 0.01,
+    minOrderSize: 0.01,
+    maxOrderSize: 100,
+    maxLeverage: 10,
+    initialMarginRate: 0.1,
+    maintenanceMarginRate: 0.05,
+  },
+  {
+    symbol: "MSFT-PERP",
+    name: "Microsoft Perpetual",
+    baseAsset: "MSFT",
+    quoteAsset: "USD",
+    finnhubSymbol: "MSFT",
     tickSize: 0.01,
     lotSize: 0.01,
     minOrderSize: 0.01,
@@ -129,3 +129,6 @@ export const INITIAL_MARKETS = [
     maintenanceMarginRate: 0.05,
   },
 ];
+
+// Alias for backwards compatibility
+export const INITIAL_MARKETS = REQUIRED_MARKETS;

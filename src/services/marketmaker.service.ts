@@ -236,6 +236,45 @@ export async function startAllMarketMakers(
 }
 
 /**
+ * Start market makers for required markets with retry logic
+ * This ensures the 3 core markets always have liquidity
+ */
+export async function startRequiredMarketMakers(
+  intervalMs: number = 5000,
+  maxRetries: number = 10,
+  retryDelayMs: number = 2000,
+  config: LiquidityConfig = DEFAULT_LIQUIDITY_CONFIG
+): Promise<void> {
+  const { REQUIRED_MARKETS } = await import("../models/market.model");
+  
+  console.log("🤖 Starting market makers for required markets...");
+  
+  for (const marketData of REQUIRED_MARKETS) {
+    const symbol = marketData.symbol;
+    let retries = 0;
+    let started = false;
+    
+    while (!started && retries < maxRetries) {
+      const price = getCachedPrice(symbol);
+      
+      if (price) {
+        await startMarketMaker(symbol, intervalMs, config);
+        started = true;
+        console.log(`   ✅ Market maker started for ${symbol} @ $${price.toFixed(2)}`);
+      } else {
+        retries++;
+        console.log(`   ⏳ Waiting for price data for ${symbol} (attempt ${retries}/${maxRetries})...`);
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+    
+    if (!started) {
+      console.warn(`   ⚠️ Could not start market maker for ${symbol} - no price data after ${maxRetries} retries`);
+    }
+  }
+}
+
+/**
  * Stop all market makers
  */
 export async function stopAllMarketMakers(): Promise<void> {

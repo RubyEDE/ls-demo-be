@@ -1,27 +1,32 @@
-import { Market, IMarket, INITIAL_MARKETS } from "../models/market.model";
+import { Market, IMarket, REQUIRED_MARKETS } from "../models/market.model";
 import { getQuote } from "./finnhub.service";
 import { broadcastPriceUpdate } from "./websocket.service";
+import { updateCandle } from "./candle.service";
 
 // In-memory cache of market prices
 const priceCache = new Map<string, { price: number; updatedAt: Date }>();
 
 /**
- * Initialize markets - seed if empty
+ * Initialize markets - ensure required markets always exist
+ * Uses upsert to create missing markets without affecting existing ones
  */
 export async function initializeMarkets(): Promise<void> {
-  const count = await Market.countDocuments();
+  console.log("🏪 Ensuring required markets exist...");
   
-  if (count === 0) {
-    console.log("🏪 Seeding initial markets...");
+  for (const marketData of REQUIRED_MARKETS) {
+    const existing = await Market.findOne({ symbol: marketData.symbol });
     
-    for (const marketData of INITIAL_MARKETS) {
+    if (!existing) {
       const market = new Market(marketData);
       await market.save();
-      console.log(`   Created market: ${market.symbol}`);
+      console.log(`   ✅ Created market: ${market.symbol}`);
+    } else {
+      console.log(`   ✓ Market exists: ${existing.symbol}`);
     }
-    
-    console.log("🏪 Markets seeded successfully");
   }
+  
+  const activeMarkets = await Market.find({ status: "active" });
+  console.log(`🏪 ${activeMarkets.length} active markets ready: ${activeMarkets.map(m => m.symbol).join(", ")}`);
 }
 
 /**
@@ -78,6 +83,9 @@ export async function fetchAndUpdatePrice(marketSymbol: string): Promise<number 
     const price = quote.currentPrice;
     
     await updateOraclePrice(marketSymbol, price);
+    
+    // Update candle data with new price
+    await updateCandle(marketSymbol, price, 0, false);
     
     // Broadcast price update via WebSocket
     broadcastPriceUpdate(marketSymbol, {
@@ -139,6 +147,18 @@ export async function startAllPriceUpdates(intervalMs: number = 5000): Promise<v
   
   for (const market of markets) {
     startPriceUpdates(market.symbol, intervalMs);
+  }
+}
+
+/**
+ * Start price updates for required markets specifically
+ * Ensures AAPL, GOOGL, MSFT always have price data
+ */
+export async function startRequiredPriceUpdates(intervalMs: number = 5000): Promise<void> {
+  console.log("📈 Starting price updates for required markets...");
+  
+  for (const marketData of REQUIRED_MARKETS) {
+    startPriceUpdates(marketData.symbol, intervalMs);
   }
 }
 

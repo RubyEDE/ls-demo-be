@@ -11,6 +11,15 @@ import {
   getEarningsCalendar,
   isConfigured,
 } from "../services/finnhub.service";
+import {
+  getCandles,
+  getCurrentCandle,
+  hasEnoughCandles,
+  getMarketStatus,
+  backfillCandles,
+} from "../services/candle.service";
+import { CandleInterval } from "../models/candle.model";
+import { getMarket } from "../services/market.service";
 
 const router = Router();
 
@@ -210,6 +219,108 @@ router.get(
       res.json({ quotes, count: quotes.length });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to fetch quotes";
+      res.status(500).json({ error: "FETCH_ERROR", message });
+    }
+  }
+);
+
+/**
+ * GET /finnhub/candles/:symbol
+ * Get OHLCV candle data for charting
+ * Works with both stock symbols (AAPL) and perp symbols (AAPL-PERP)
+ * 
+ * Query params:
+ *   - interval: 1m, 5m, 15m, 1h, 4h, 1d (default: 1m)
+ *   - limit: number of candles (default: 100, max: 500)
+ */
+router.get(
+  "/candles/:symbol",
+  authMiddleware,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      let symbol = (req.params.symbol as string).toUpperCase();
+      const interval = (req.query.interval as CandleInterval) || "1m";
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+      
+      // Validate interval
+      const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+      if (!validIntervals.includes(interval)) {
+        res.status(400).json({
+          error: "INVALID_INTERVAL",
+          message: `Invalid interval. Must be one of: ${validIntervals.join(", ")}`,
+        });
+        return;
+      }
+      
+      // Convert stock symbol to perp symbol if needed
+      const perpSymbol = symbol.endsWith("-PERP") ? symbol : `${symbol}-PERP`;
+      
+      // Check if market exists
+      const market = await getMarket(perpSymbol);
+      if (!market) {
+        res.status(404).json({
+          error: "NOT_FOUND",
+          message: `Market not found: ${perpSymbol}`,
+        });
+        return;
+      }
+      
+      // Check if we have enough candles
+      const check = await hasEnoughCandles(perpSymbol, interval, 50);
+      
+      // Backfill if needed
+      if (!check.hasEnough) {
+        await backfillCandles(perpSymbol, interval, 100);
+      }
+      
+      // Get candles from DB
+      const candles = await getCandles(perpSymbol, interval, limit);
+      
+      // Get current live candle
+      const currentCandle = getCurrentCandle(perpSymbol, interval);
+      
+      // Format response similar to TradingView/standard OHLCV format
+      res.json({
+        symbol: perpSymbol,
+        interval,
+        marketStatus: getMarketStatus(),
+        // Standard OHLCV arrays for easy charting library integration
+        t: candles.map((c) => Math.floor(c.timestamp.getTime() / 1000)), // Unix timestamps
+        o: candles.map((c) => c.open),
+        h: candles.map((c) => c.high),
+        l: candles.map((c) => c.low),
+        c: candles.map((c) => c.close),
+        v: candles.map((c) => c.volume),
+        // Additional metadata
+        candles: candles.map((c) => ({
+          time: c.timestamp.getTime(),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+          trades: c.trades,
+          isClosed: c.isClosed,
+          isMarketOpen: c.isMarketOpen,
+        })),
+        current: currentCandle ? {
+          time: currentCandle.timestamp.getTime(),
+          open: currentCandle.open,
+          high: currentCandle.high,
+          low: currentCandle.low,
+          close: currentCandle.close,
+          volume: currentCandle.volume,
+          trades: currentCandle.trades,
+        } : null,
+        meta: {
+          count: candles.length,
+          hasEnoughData: check.hasEnough || candles.length >= 50,
+          firstCandle: candles.length > 0 ? candles[0].timestamp.getTime() : null,
+          lastCandle: candles.length > 0 ? candles[candles.length - 1].timestamp.getTime() : null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to fetch candles";
       res.status(500).json({ error: "FETCH_ERROR", message });
     }
   }

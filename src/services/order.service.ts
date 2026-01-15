@@ -13,7 +13,7 @@ import {
   sendOrderUpdate, 
   sendBalanceUpdate 
 } from "./websocket.service";
-import { lockBalanceByAddress, unlockBalanceByAddress } from "./balance.service";
+import { lockBalanceByAddress, unlockBalanceByAddress, getBalanceByAddress } from "./balance.service";
 import { handleTradeExecution } from "./position.service";
 
 interface PlaceOrderParams {
@@ -106,7 +106,13 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
   );
   
   if (!lockResult.success) {
-    return { success: false, error: "Insufficient balance" };
+    // Get current balance to show helpful error
+    const balance = await getBalanceByAddress(userAddress);
+    const available = balance?.free ?? 0;
+    return { 
+      success: false, 
+      error: `Insufficient balance. Required: $${requiredMargin.toFixed(2)}, Available: $${available.toFixed(2)}` 
+    };
   }
   
   // Create the order
