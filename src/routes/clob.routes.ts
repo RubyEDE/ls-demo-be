@@ -644,13 +644,13 @@ router.get("/market-status", (_req: Request, res: Response) => {
 /**
  * GET /clob/candles/:symbol
  * Get candle data for a market
- * Query params: interval (1m, 5m, 15m, 1h, 4h, 1d), limit (default 100)
+ * Query params: interval (1m, 5m, 15m, 1h, 4h, 1d), limit (default 400)
  */
 router.get("/candles/:symbol", async (req: Request, res: Response) => {
   try {
     const symbol = req.params.symbol as string;
     const interval = (req.query.interval as CandleInterval) || "1m";
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const limit = Math.min(parseInt(req.query.limit as string) || 400, 2000);
     
     // Validate interval
     const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];

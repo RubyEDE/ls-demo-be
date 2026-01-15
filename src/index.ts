@@ -64,7 +64,7 @@ async function start() {
   // Start market makers for required markets (AAPL, GOOGL, MSFT)
   // Uses retry logic to wait for price data
   setTimeout(async () => {
-    await startRequiredMarketMakers(500); // Update liquidity every 5 seconds
+    await startRequiredMarketMakers(500); // Update liquidity every 500ms
   }, 3000);
   
   // Initialize candle data (backfill if needed, start generator)
