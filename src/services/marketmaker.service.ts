@@ -20,7 +20,7 @@ interface LiquidityConfig {
 }
 
 const DEFAULT_LIQUIDITY_CONFIG: LiquidityConfig = {
-  levels: 15,
+  levels: 25,                  // 25 bids + 25 asks = 50 orders total
   spreadPercent: 0.0005,      // 0.05% spread
   levelSpacingPercent: 0.0002, // 0.02% between levels
   baseQuantity: 5,
