@@ -12,6 +12,8 @@ import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.
 import { initializeMarkets, startRequiredPriceUpdates } from "./services/market.service";
 import { startRequiredMarketMakers } from "./services/marketmaker.service";
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
+import { startLiquidationEngine, isLiquidationEngineRunning, getLiquidationStats } from "./services/liquidation.service";
+import { getRateLimitStatus } from "./services/finnhub.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -25,6 +27,8 @@ app.use(express.json());
 
 // Health check
 app.get("/health", (_req, res) => {
+  const liquidationStats = getLiquidationStats();
+  const rateLimitStatus = getRateLimitStatus();
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
@@ -32,6 +36,17 @@ app.get("/health", (_req, res) => {
     websocket: {
       activeChannels: getActiveChannels(),
       pollingSymbols: getPollingSymbols(),
+    },
+    liquidation: {
+      engineRunning: isLiquidationEngineRunning(),
+      totalLiquidations: liquidationStats.totalLiquidations,
+      totalValueLiquidated: liquidationStats.totalValueLiquidated,
+      lastLiquidationAt: liquidationStats.lastLiquidationAt?.toISOString() || null,
+    },
+    finnhub: {
+      callsInLastMinute: rateLimitStatus.callsInLastMinute,
+      maxCallsPerMinute: rateLimitStatus.maxCallsPerMinute,
+      canMakeCall: rateLimitStatus.canMakeCall,
     },
   });
 });
@@ -58,8 +73,18 @@ async function start() {
   // Initialize perpetual markets
   await initializeMarkets();
   
-  // Start price updates for required markets (AAPL, GOOGL, MSFT)
-  await startRequiredPriceUpdates(10000); // Update every 15 seconds
+  // Fetch initial prices FIRST (needed for candle backfill)
+  // This just fetches prices, doesn't start the update loop yet
+  console.log("📊 Fetching initial prices...");
+  await startRequiredPriceUpdates(30000); // Update every 30 seconds
+  
+  // Wait a moment for prices to be cached
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // Initialize candle data BEFORE continuous updates create live candles
+  // This ensures backfill happens first, so live candles have previous data to reference
+  console.log("📊 Initializing candle data (must complete before live updates)...");
+  await initializeCandles();
   
   // Start market makers for required markets (AAPL, GOOGL, MSFT)
   // Uses retry logic to wait for price data
@@ -67,10 +92,10 @@ async function start() {
     await startRequiredMarketMakers(500); // Update liquidity every 500ms
   }, 3000);
   
-  // Initialize candle data (backfill if needed, start generator)
-  setTimeout(async () => {
-    await initializeCandles();
-  }, 5000);
+  // Start liquidation engine (after candles are initialized)
+  setTimeout(() => {
+    startLiquidationEngine(1000); // Check for liquidations every 1 second
+  }, 2000);
   
   // Start price feed manager for auto-polling
   startPriceFeedManager();
@@ -126,8 +151,18 @@ Available endpoints:
   
   Candles (Price Charts):
     GET  /clob/market-status         - Get market open/closed status
+    GET  /clob/market-hours          - Get US market hours status
     GET  /clob/candles/:symbol       - Get candle data (?interval=1m&limit=100)
     GET  /clob/candles/:symbol/status - Check if enough candle data exists
+    GET  /clob/candles/:symbol/gaps  - Get gap statistics for all intervals
+    GET  /clob/candles/:symbol/gaps/:interval - Get missing timestamps
+    POST /clob/candles/:symbol/fill-gaps - Fill missing candles (?interval=1m)
+    POST /clob/candles/:symbol/fetch-historical - Fetch real Finnhub data (?days=365)
+  
+  Liquidation:
+    GET  /clob/liquidation/stats     - Get liquidation engine statistics
+    GET  /clob/liquidation/at-risk   - Get positions at risk (?threshold=5)
+    GET  /clob/positions/:symbol/liquidation-risk - Check position risk (auth)
   
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates

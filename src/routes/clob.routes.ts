@@ -25,8 +25,19 @@ import {
   getCurrentCandle,
   hasEnoughCandles,
   getMarketStatus,
+  getGapStats,
+  findMissingCandles,
+  fillMissingCandles,
+  checkAndFillGaps,
+  fetchAllHistoricalData,
+  isUSMarketOpen,
 } from "../services/candle.service";
 import { CandleInterval } from "../models/candle.model";
+import {
+  getLiquidationStats,
+  getPositionsAtRiskOfLiquidation,
+  checkPositionLiquidation,
+} from "../services/liquidation.service";
 
 const router = Router();
 
@@ -643,14 +654,14 @@ router.get("/market-status", (_req: Request, res: Response) => {
 
 /**
  * GET /clob/candles/:symbol
- * Get candle data for a market
- * Query params: interval (1m, 5m, 15m, 1h, 4h, 1d), limit (default 400)
+ * Get candle data for a market (public, no auth required)
+ * Query params: interval (1m, 5m, 15m, 1h, 4h, 1d), limit (default 1000, max 10000)
  */
 router.get("/candles/:symbol", async (req: Request, res: Response) => {
   try {
     const symbol = req.params.symbol as string;
     const interval = (req.query.interval as CandleInterval) || "1m";
-    const limit = Math.min(parseInt(req.query.limit as string) || 400, 2000);
+    const limit = Math.min(parseInt(req.query.limit as string) || 1000, 10000);
     
     // Validate interval
     const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
@@ -741,6 +752,317 @@ router.get("/candles/:symbol/status", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error checking candle status:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to check candle status" });
+  }
+});
+
+/**
+ * GET /clob/candles/:symbol/gaps
+ * Get gap statistics for a market's candle data
+ */
+router.get("/candles/:symbol/gaps", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const stats = await getGapStats(market.symbol);
+    
+    res.json({
+      symbol: stats.symbol,
+      intervals: stats.intervals.map((s) => ({
+        interval: s.interval,
+        totalCandles: s.totalCandles,
+        missingCandles: s.missingCandles,
+        coveragePercent: s.coveragePercent + "%",
+        oldestCandle: s.oldestCandle?.toISOString() || null,
+        newestCandle: s.newestCandle?.toISOString() || null,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching gap stats:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch gap stats" });
+  }
+});
+
+/**
+ * GET /clob/candles/:symbol/gaps/:interval
+ * Get detailed gap information for a specific interval
+ */
+router.get("/candles/:symbol/gaps/:interval", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const interval = req.params.interval as CandleInterval;
+    
+    // Validate interval
+    const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+    if (!validIntervals.includes(interval)) {
+      return res.status(400).json({
+        error: "INVALID_INTERVAL",
+        message: `Invalid interval. Must be one of: ${validIntervals.join(", ")}`,
+      });
+    }
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const missing = await findMissingCandles(market.symbol, interval);
+    
+    res.json({
+      symbol: market.symbol,
+      interval,
+      totalMissing: missing.length,
+      missingTimestamps: missing.slice(0, limit).map((t) => t.toISOString()),
+      truncated: missing.length > limit,
+    });
+  } catch (error) {
+    console.error("Error fetching missing candles:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch missing candles" });
+  }
+});
+
+/**
+ * POST /clob/candles/:symbol/fill-gaps
+ * Fill missing candles for a market (creates synthetic data)
+ * Query params: interval (optional, if not provided fills all intervals)
+ */
+router.post("/candles/:symbol/fill-gaps", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const interval = req.query.interval as CandleInterval | undefined;
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    // Validate interval if provided
+    if (interval) {
+      const validIntervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
+      if (!validIntervals.includes(interval)) {
+        return res.status(400).json({
+          error: "INVALID_INTERVAL",
+          message: `Invalid interval. Must be one of: ${validIntervals.join(", ")}`,
+        });
+      }
+      
+      // Fill gaps for specific interval
+      const missing = await findMissingCandles(market.symbol, interval);
+      const filled = await fillMissingCandles(market.symbol, interval, missing);
+      
+      res.json({
+        success: true,
+        symbol: market.symbol,
+        interval,
+        gapsFound: missing.length,
+        candlesFilled: filled,
+      });
+    } else {
+      // Fill gaps for all intervals
+      const results = await checkAndFillGaps(market.symbol);
+      
+      const totalMissing = results.reduce((sum, r) => sum + r.missing, 0);
+      const totalFilled = results.reduce((sum, r) => sum + r.filled, 0);
+      
+      res.json({
+        success: true,
+        symbol: market.symbol,
+        totalGapsFound: totalMissing,
+        totalCandlesFilled: totalFilled,
+        byInterval: results.map((r) => ({
+          interval: r.interval,
+          gapsFound: r.missing,
+          candlesFilled: r.filled,
+        })),
+      });
+    }
+  } catch (error) {
+    console.error("Error filling candle gaps:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fill candle gaps" });
+  }
+});
+
+/**
+ * POST /clob/candles/:symbol/fetch-historical
+ * Fetch real historical data from Finnhub
+ * Query params: days (default 365)
+ */
+router.post("/candles/:symbol/fetch-historical", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const days = Math.min(parseInt(req.query.days as string) || 365, 365);
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    console.log(`📈 Manual historical data fetch triggered for ${market.symbol}`);
+    
+    // Fetch historical data
+    await fetchAllHistoricalData(market.finnhubSymbol, market.symbol, days);
+    
+    // Get updated stats
+    const stats = await getGapStats(market.symbol);
+    
+    res.json({
+      success: true,
+      symbol: market.symbol,
+      daysFetched: days,
+      intervals: stats.intervals.map((s) => ({
+        interval: s.interval,
+        totalCandles: s.totalCandles,
+        missingCandles: s.missingCandles,
+        coveragePercent: s.coveragePercent + "%",
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching historical candles:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch historical candles" });
+  }
+});
+
+/**
+ * GET /clob/market-hours
+ * Get current US market hours status
+ */
+router.get("/market-hours", (_req: Request, res: Response) => {
+  const now = new Date();
+  const isOpen = isUSMarketOpen(now);
+  
+  res.json({
+    timestamp: now.toISOString(),
+    usMarket: {
+      isOpen,
+      hours: "9:30 AM - 4:00 PM ET",
+      days: "Monday - Friday",
+    },
+    perpetualsDex: {
+      isOpen: true,
+      hours: "24/7",
+    },
+  });
+});
+
+// ============ Liquidation Routes ============
+
+/**
+ * GET /clob/liquidation/stats
+ * Get liquidation engine statistics (public)
+ */
+router.get("/liquidation/stats", (_req: Request, res: Response) => {
+  const stats = getLiquidationStats();
+  res.json({
+    totalLiquidations: stats.totalLiquidations,
+    totalValueLiquidated: stats.totalValueLiquidated,
+    lastLiquidationAt: stats.lastLiquidationAt?.toISOString() || null,
+  });
+});
+
+/**
+ * GET /clob/liquidation/at-risk
+ * Get positions at risk of liquidation (public, for market transparency)
+ * Query params: threshold (default 5 = positions within 5% of liquidation)
+ */
+router.get("/liquidation/at-risk", async (req: Request, res: Response) => {
+  try {
+    const threshold = Math.min(parseFloat(req.query.threshold as string) || 5, 20);
+    
+    const atRisk = await getPositionsAtRiskOfLiquidation(threshold);
+    
+    res.json({
+      threshold: `${threshold}%`,
+      count: atRisk.length,
+      positions: atRisk.map((r) => ({
+        marketSymbol: r.position.marketSymbol,
+        side: r.position.side,
+        size: r.position.size,
+        entryPrice: r.position.entryPrice,
+        currentPrice: r.currentPrice,
+        liquidationPrice: r.position.liquidationPrice,
+        distanceToLiquidation: r.distanceToLiquidation,
+        distancePercent: r.distancePercent.toFixed(2) + "%",
+        margin: r.position.margin,
+        // Don't expose user address for privacy
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching at-risk positions:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch at-risk positions" });
+  }
+});
+
+/**
+ * GET /clob/positions/:marketSymbol/liquidation-risk
+ * Check liquidation risk for user's position in a specific market
+ */
+router.get("/positions/:marketSymbol/liquidation-risk", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const marketSymbol = req.params.marketSymbol as string;
+    
+    const market = await getMarket(marketSymbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const position = await getOpenPosition(authReq.auth!.address, marketSymbol);
+    
+    if (!position) {
+      return res.json({ 
+        hasPosition: false,
+        atRisk: false,
+      });
+    }
+    
+    const currentPrice = getCachedPrice(marketSymbol);
+    
+    if (!currentPrice) {
+      return res.json({
+        hasPosition: true,
+        atRisk: false,
+        message: "No price data available",
+      });
+    }
+    
+    // Calculate distance to liquidation
+    let distanceToLiquidation: number;
+    let distancePercent: number;
+    
+    if (position.side === "long") {
+      distanceToLiquidation = currentPrice - position.liquidationPrice;
+      distancePercent = (distanceToLiquidation / currentPrice) * 100;
+    } else {
+      distanceToLiquidation = position.liquidationPrice - currentPrice;
+      distancePercent = (distanceToLiquidation / currentPrice) * 100;
+    }
+    
+    const atRisk = distancePercent <= 10; // Within 10% of liquidation
+    const critical = distancePercent <= 3;  // Within 3% of liquidation
+    
+    res.json({
+      hasPosition: true,
+      positionId: position.positionId,
+      side: position.side,
+      size: position.size,
+      entryPrice: position.entryPrice,
+      currentPrice,
+      liquidationPrice: position.liquidationPrice,
+      distanceToLiquidation,
+      distancePercent: distancePercent.toFixed(2) + "%",
+      atRisk,
+      critical,
+      riskLevel: critical ? "critical" : atRisk ? "warning" : "safe",
+    });
+  } catch (error) {
+    console.error("Error checking liquidation risk:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to check liquidation risk" });
   }
 });
 
