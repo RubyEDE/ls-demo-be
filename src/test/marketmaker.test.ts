@@ -10,6 +10,8 @@
  * Prerequisites: Server must be running (npm run dev)
  */
 
+export {};
+
 const BASE_URL = "http://localhost:3000";
 
 const REQUIRED_MARKETS = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];

@@ -15,7 +15,6 @@ export interface IMarket extends Document {
   tickSize: number;         // Minimum price increment (e.g., 0.01)
   lotSize: number;          // Minimum quantity increment (e.g., 0.001)
   minOrderSize: number;     // Minimum order quantity
-  maxOrderSize: number;     // Maximum order quantity
   
   // Leverage settings
   maxLeverage: number;      // e.g., 20 for 20x
@@ -54,7 +53,6 @@ const MarketSchema = new Schema<IMarket>(
     tickSize: { type: Number, required: true, default: 0.01 },
     lotSize: { type: Number, required: true, default: 0.001 },
     minOrderSize: { type: Number, required: true, default: 0.001 },
-    maxOrderSize: { type: Number, required: true, default: 1000 },
     
     maxLeverage: { type: Number, required: true, default: 20 },
     initialMarginRate: { type: Number, required: true, default: 0.05 },
@@ -95,7 +93,6 @@ export const REQUIRED_MARKETS = [
     tickSize: 0.01,
     lotSize: 0.01,
     minOrderSize: 0.01,
-    maxOrderSize: 100,
     maxLeverage: 10,
     initialMarginRate: 0.1,
     maintenanceMarginRate: 0.05,
@@ -109,7 +106,6 @@ export const REQUIRED_MARKETS = [
     tickSize: 0.01,
     lotSize: 0.01,
     minOrderSize: 0.01,
-    maxOrderSize: 100,
     maxLeverage: 10,
     initialMarginRate: 0.1,
     maintenanceMarginRate: 0.05,
@@ -123,7 +119,6 @@ export const REQUIRED_MARKETS = [
     tickSize: 0.01,
     lotSize: 0.01,
     minOrderSize: 0.01,
-    maxOrderSize: 100,
     maxLeverage: 10,
     initialMarginRate: 0.1,
     maintenanceMarginRate: 0.05,

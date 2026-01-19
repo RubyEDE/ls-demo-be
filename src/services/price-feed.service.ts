@@ -7,25 +7,14 @@ const lastPrices = new Map<string, PriceUpdate>();
 // Active polling intervals
 const pollingIntervals = new Map<string, NodeJS.Timeout>();
 
-// Default polling interval (in ms) - longer to avoid API spam
-// Note: Required markets (AAPL, GOOGL, MSFT) are already polled by market.service.ts
-const POLLING_INTERVAL = 30000; // 30 seconds
-
-// Markets that are already being polled by market.service.ts
-const REQUIRED_MARKET_SYMBOLS = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];
+// Default polling interval (in ms)
+const POLLING_INTERVAL = 5000; // 5 seconds
 
 /**
  * Start polling prices for a symbol
- * Note: Required markets (AAPL-PERP, etc.) are already polled by market.service.ts
  */
 export function startPricePolling(symbol: string, intervalMs: number = POLLING_INTERVAL): void {
   const upperSymbol = symbol.toUpperCase();
-  
-  // Skip if this is a required market - already being polled by market.service.ts
-  if (REQUIRED_MARKET_SYMBOLS.includes(upperSymbol)) {
-    console.log(`📈 ${upperSymbol} already polled by market service, skipping`);
-    return;
-  }
   
   // Already polling this symbol
   if (pollingIntervals.has(upperSymbol)) {

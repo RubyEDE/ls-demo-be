@@ -9,6 +9,8 @@
  * - User should have positions open (run position.test.ts first)
  */
 
+export {};
+
 const BASE_URL = "http://localhost:3000";
 
 interface LiquidationStats {

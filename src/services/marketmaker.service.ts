@@ -4,7 +4,7 @@ import { Trade } from "../models/trade.model";
 import { getMarket, getCachedPrice, roundToTickSize, roundToLotSize } from "./market.service";
 import { rebuildOrderBook, broadcastOrderBook, getBestAsk, getBestBid } from "./orderbook.service";
 import { broadcastTradeExecuted } from "./websocket.service";
-import { updateCandle } from "./candle.service";
+import { updateCandleFromTrade } from "./candle.service";
 
 // Configuration for synthetic liquidity
 interface LiquidityConfig {
@@ -24,8 +24,8 @@ interface LiquidityConfig {
 
 const DEFAULT_LIQUIDITY_CONFIG: LiquidityConfig = {
   levels: 25,                  // 25 bids + 25 asks = 50 orders total
-  spreadPercent: 0.0001,      // 0.01% spread (~$0.03 on $300 stock = tight spread)
-  levelSpacingPercent: 0.00005, // 0.005% between levels (~$0.015 per level)
+  spreadPercent: 0.0005,      // 0.05% spread
+  levelSpacingPercent: 0.0002, // 0.02% between levels
   baseQuantity: 5,
   quantityMultiplier: 1.2,
   quantityVariance: 0.3,
@@ -45,10 +45,10 @@ interface TradeGeneratorConfig {
 
 const DEFAULT_TRADE_CONFIG: TradeGeneratorConfig = {
   minTrades: 1,
-  maxTrades: 1,          // Usually just 1 trade at a time
+  maxTrades: 2,
   minQuantity: 0.1,
-  maxQuantity: 0.8,      // Smaller trades
-  intervalMs: 3000,      // Generate trades every 3 seconds (much calmer)
+  maxQuantity: 1.5,
+  intervalMs: 500,       // Generate trades every 500ms
 };
 
 // Store synthetic orders per market
@@ -60,290 +60,70 @@ const mmIntervals = new Map<string, NodeJS.Timeout>();
 // Trade generator intervals
 const tradeIntervals = new Map<string, NodeJS.Timeout>();
 
-// ============ Market State Machine ============
-// Creates realistic market behavior with trends, consolidation, and momentum
-
-type MarketPhase = "trending_up" | "trending_down" | "consolidation" | "breakout" | "reversal";
-
-interface MarketState {
-  phase: MarketPhase;           // Current market phase
-  phaseDuration: number;        // How long we've been in this phase (in ticks)
-  phaseTarget: number;          // Target duration for this phase
-  drift: number;                // Current drift from oracle price (percentage)
-  momentum: number;             // Current momentum (-1 to 1)
-  volatility: number;           // Current volatility multiplier (0.5 to 2.0)
-  buyPressure: number;          // Accumulated buy pressure (0 to 1)
-  lastUpdate: number;
-}
-
-const marketStates = new Map<string, MarketState>();
-
-// Initialize or get market state
-function getOrCreateMarketState(symbol: string): MarketState {
-  if (!marketStates.has(symbol)) {
-    // Start with a random initial phase
-    const phases: MarketPhase[] = ["trending_up", "trending_down", "consolidation"];
-    const initialPhase = phases[Math.floor(Math.random() * phases.length)];
-    
-    marketStates.set(symbol, {
-      phase: initialPhase,
-      phaseDuration: 0,
-      phaseTarget: 20 + Math.floor(Math.random() * 40), // 20-60 ticks
-      drift: 0,
-      momentum: initialPhase === "trending_up" ? 0.3 : initialPhase === "trending_down" ? -0.3 : 0,
-      volatility: 1.0,
-      buyPressure: 0.5, // Neutral
-      lastUpdate: Date.now(),
-    });
-  }
-  return marketStates.get(symbol)!;
-}
-
-// Transition to a new market phase
-function transitionPhase(state: MarketState): void {
-  const currentPhase = state.phase;
-  let newPhase: MarketPhase;
-  
-  // Determine next phase based on current phase and randomness
-  const rand = Math.random();
-  
-  switch (currentPhase) {
-    case "trending_up":
-      if (rand < 0.3) newPhase = "consolidation";
-      else if (rand < 0.5) newPhase = "reversal";
-      else if (rand < 0.7) newPhase = "breakout";
-      else newPhase = "trending_up"; // Continue trend
-      break;
-      
-    case "trending_down":
-      if (rand < 0.3) newPhase = "consolidation";
-      else if (rand < 0.5) newPhase = "reversal";
-      else if (rand < 0.7) newPhase = "breakout";
-      else newPhase = "trending_down"; // Continue trend
-      break;
-      
-    case "consolidation":
-      if (rand < 0.35) newPhase = "trending_up";
-      else if (rand < 0.7) newPhase = "trending_down";
-      else if (rand < 0.85) newPhase = "breakout";
-      else newPhase = "consolidation"; // Continue consolidation
-      break;
-      
-    case "breakout":
-      // Breakouts typically lead to trends
-      if (rand < 0.6) newPhase = state.momentum > 0 ? "trending_up" : "trending_down";
-      else newPhase = "reversal";
-      break;
-      
-    case "reversal":
-      // Reversals flip the trend
-      if (state.momentum > 0) newPhase = "trending_down";
-      else newPhase = "trending_up";
-      break;
-      
-    default:
-      newPhase = "consolidation";
-  }
-  
-  // Apply phase transition
-  state.phase = newPhase;
-  state.phaseDuration = 0;
-  state.phaseTarget = getPhaseTargetDuration(newPhase);
-  
-  // Adjust momentum and volatility for new phase
-  switch (newPhase) {
-    case "trending_up":
-      state.momentum = 0.3 + Math.random() * 0.4; // 0.3 to 0.7
-      state.volatility = 0.8 + Math.random() * 0.4; // Moderate volatility
-      break;
-    case "trending_down":
-      state.momentum = -(0.3 + Math.random() * 0.4); // -0.3 to -0.7
-      state.volatility = 0.8 + Math.random() * 0.5; // Slightly higher on downtrends
-      break;
-    case "consolidation":
-      state.momentum *= 0.3; // Dampen momentum
-      state.volatility = 0.5 + Math.random() * 0.3; // Low volatility
-      break;
-    case "breakout":
-      state.volatility = 1.5 + Math.random() * 0.5; // High volatility
-      state.momentum = state.momentum > 0 ? 0.6 : -0.6; // Strong directional move
-      break;
-    case "reversal":
-      state.momentum = -state.momentum * 0.8; // Flip momentum
-      state.volatility = 1.2 + Math.random() * 0.4; // Elevated volatility
-      break;
-  }
-}
-
-function getPhaseTargetDuration(phase: MarketPhase): number {
-  switch (phase) {
-    case "trending_up":
-    case "trending_down":
-      return 30 + Math.floor(Math.random() * 60); // 30-90 ticks (trends last longer)
-    case "consolidation":
-      return 20 + Math.floor(Math.random() * 40); // 20-60 ticks
-    case "breakout":
-      return 5 + Math.floor(Math.random() * 10); // 5-15 ticks (quick)
-    case "reversal":
-      return 8 + Math.floor(Math.random() * 12); // 8-20 ticks
-    default:
-      return 30;
-  }
-}
-
-// Update market state (called each trade generation cycle)
-function updateMarketState(symbol: string): void {
-  const state = getOrCreateMarketState(symbol);
-  
-  state.phaseDuration++;
-  state.lastUpdate = Date.now();
-  
-  // Check for phase transition
-  if (state.phaseDuration >= state.phaseTarget) {
-    transitionPhase(state);
-  }
-  
-  // Apply gradual changes within the phase
-  // Momentum decay towards 0 (mean reversion)
-  state.momentum *= 0.99;
-  
-  // Volatility mean reversion towards 1.0
-  state.volatility = state.volatility * 0.98 + 1.0 * 0.02;
-  
-  // Drift mean reversion towards 0 (back to oracle price)
-  state.drift *= 0.98;
-  
-  // Clamp values - tight bounds for realistic equity movements
-  state.drift = Math.max(-0.0005, Math.min(0.0005, state.drift)); // Max 0.05% drift
-  state.momentum = Math.max(-1, Math.min(1, state.momentum));
-  state.volatility = Math.max(0.5, Math.min(1.5, state.volatility)); // Tighter volatility range
-}
-
-// Determine trade side based on market state (returns buy probability)
-function getTradeBias(state: MarketState): number {
-  let buyProb = 0.5; // Base 50/50
-  
-  // Adjust based on phase
-  switch (state.phase) {
-    case "trending_up":
-      buyProb = 0.6 + state.momentum * 0.2; // 60-80% buy bias
-      break;
-    case "trending_down":
-      buyProb = 0.4 + state.momentum * 0.2; // 20-40% buy bias
-      break;
-    case "consolidation":
-      // Oscillate around 50% with slight noise
-      buyProb = 0.45 + Math.random() * 0.1;
-      break;
-    case "breakout":
-      // Strong directional bias
-      buyProb = state.momentum > 0 ? 0.75 : 0.25;
-      break;
-    case "reversal":
-      // Counter-trend trades increase
-      buyProb = state.momentum > 0 ? 0.35 : 0.65;
-      break;
-  }
-  
-  // Add some randomness
-  buyProb += (Math.random() - 0.5) * 0.1;
-  
-  return Math.max(0.15, Math.min(0.85, buyProb)); // Clamp to prevent 100% one-sided
-}
-
-// Get trade intensity based on market state (affects number of trades)
-function getTradeIntensity(state: MarketState): number {
-  switch (state.phase) {
-    case "trending_up":
-    case "trending_down":
-      return 1.0 + state.volatility * 0.3;
-    case "consolidation":
-      return 0.6 + Math.random() * 0.2; // Lower activity
-    case "breakout":
-      return 1.8 + Math.random() * 0.5; // High activity
-    case "reversal":
-      return 1.4 + Math.random() * 0.3; // Elevated activity
-    default:
-      return 1.0;
-  }
-}
-
-// Legacy compatibility - maps to new system
+// Price drift tracking per market (simulates market pressure)
 interface PriceDrift {
-  drift: number;
-  momentum: number;
+  drift: number;          // Current drift from oracle price (as percentage, e.g., 0.001 = 0.1%)
+  momentum: number;       // Current momentum (-1 to 1, negative = bearish, positive = bullish)
   lastUpdate: number;
 }
 
 const priceDrifts = new Map<string, PriceDrift>();
 
+// Get or create price drift for a market
 function getOrCreatePriceDrift(symbol: string): PriceDrift {
-  const state = getOrCreateMarketState(symbol);
-  // Return a view that's compatible with existing code
-  return {
-    drift: state.drift,
-    momentum: state.momentum,
-    lastUpdate: state.lastUpdate,
-  };
+  if (!priceDrifts.has(symbol)) {
+    priceDrifts.set(symbol, {
+      drift: 0,
+      momentum: 0,
+      lastUpdate: Date.now(),
+    });
+  }
+  return priceDrifts.get(symbol)!;
 }
 
 // Update price drift based on trade activity
 function updatePriceDrift(symbol: string, side: "buy" | "sell", quantity: number): void {
-  const state = getOrCreateMarketState(symbol);
+  const drift = getOrCreatePriceDrift(symbol);
   
   // Buy pressure pushes price up, sell pressure pushes down
-  // Very small impact - realistic for equities (moves of $0.01-0.03 on ~$300 stocks)
-  const impact = side === "buy" ? 0.000008 : -0.000008; // ~$0.0025 per trade on $300 stock
+  const impact = side === "buy" ? 0.00005 : -0.00005;
   const quantityFactor = Math.min(quantity / 2, 1); // Cap impact from large trades
   
-  // Update momentum based on trade flow (subtle)
-  const momentumImpact = (side === "buy" ? 0.02 : -0.02) * quantityFactor;
-  state.momentum = state.momentum * 0.98 + momentumImpact;
-  state.momentum = Math.max(-1, Math.min(1, state.momentum));
+  // Update momentum (with decay)
+  drift.momentum = drift.momentum * 0.95 + (side === "buy" ? 0.1 : -0.1) * quantityFactor;
+  drift.momentum = Math.max(-1, Math.min(1, drift.momentum)); // Clamp to [-1, 1]
   
-  // Update drift (bounded - max ~0.05% = ~$0.15 on $300 stock)
-  state.drift += impact * quantityFactor * state.volatility;
-  state.drift = Math.max(-0.0005, Math.min(0.0005, state.drift)); // Max 0.05% drift from oracle
+  // Update drift (bounded to prevent runaway prices)
+  drift.drift += impact * quantityFactor;
+  drift.drift = Math.max(-0.005, Math.min(0.005, drift.drift)); // Max 0.5% drift from oracle
   
-  // Update buy pressure tracker
-  state.buyPressure = state.buyPressure * 0.95 + (side === "buy" ? 0.05 : 0);
-  
-  state.lastUpdate = Date.now();
+  drift.lastUpdate = Date.now();
 }
 
 // Apply random walk to price drift (called periodically)
 function applyRandomWalk(symbol: string): void {
-  const state = getOrCreateMarketState(symbol);
+  const drift = getOrCreatePriceDrift(symbol);
   
-  // Update market state machine
-  updateMarketState(symbol);
-  
-  // Random walk component - very small for realistic equity movements
-  // ~$0.01-0.02 moves on a $300 stock
-  const randomStep = (Math.random() - 0.5) * 0.00003 * state.volatility;
+  // Random walk component
+  const randomStep = (Math.random() - 0.5) * 0.0002; // Small random step
   
   // Mean reversion (slowly pull back to oracle price)
-  const reversion = -state.drift * 0.05;
+  const reversion = -drift.drift * 0.02;
   
-  // Phase-based momentum influence (subtle)
-  let momentumInfluence = state.momentum * 0.00002;
-  if (state.phase === "breakout") {
-    momentumInfluence *= 1.5; // Slightly stronger moves during breakouts
-  } else if (state.phase === "consolidation") {
-    momentumInfluence *= 0.3; // Weaker moves during consolidation
-  }
+  // Momentum influence
+  const momentumInfluence = drift.momentum * 0.0001;
   
-  state.drift += randomStep + reversion + momentumInfluence;
-  state.drift = Math.max(-0.0005, Math.min(0.0005, state.drift)); // Max 0.05% drift (~$0.15 on $300)
+  drift.drift += randomStep + reversion + momentumInfluence;
+  drift.drift = Math.max(-0.005, Math.min(0.005, drift.drift)); // Max 0.5% drift
+  
+  // Decay momentum
+  drift.momentum *= 0.98;
 }
 
 // Get adjusted mid price based on drift
-// ANCHORED to oracle price - never drifts more than 0.1%
 function getAdjustedMidPrice(symbol: string, oraclePrice: number): number {
-  const state = getOrCreateMarketState(symbol);
-  // Clamp drift to max 0.1% (safety check)
-  const clampedDrift = Math.max(-0.001, Math.min(0.001, state.drift));
-  return oraclePrice * (1 + clampedDrift);
+  const drift = getOrCreatePriceDrift(symbol);
+  return oraclePrice * (1 + drift.drift);
 }
 
 /**
@@ -360,21 +140,15 @@ export async function generateSyntheticOrders(
   }
   
   const orders: IOrder[] = [];
-  const state = getOrCreateMarketState(marketSymbol);
+  const drift = getOrCreatePriceDrift(marketSymbol);
   
   // Calculate spread with slight randomization
   const spreadVariance = 1 + (Math.random() - 0.5) * 0.2; // +/- 10% spread variation
   const halfSpread = midPrice * config.spreadPercent * spreadVariance;
   
-  // Adjust spread based on volatility and phase
-  let spreadMultiplier = 1 + Math.abs(state.momentum) * 0.3;
-  if (state.phase === "breakout" || state.phase === "reversal") {
-    spreadMultiplier *= 1.3; // Wider spreads during volatile phases
-  } else if (state.phase === "consolidation") {
-    spreadMultiplier *= 0.8; // Tighter spreads during consolidation
-  }
-  spreadMultiplier *= state.volatility;
-  const adjustedHalfSpread = halfSpread * spreadMultiplier;
+  // Adjust spread based on momentum (wider spread when volatile)
+  const momentumSpreadAdjust = 1 + Math.abs(drift.momentum) * 0.3;
+  const adjustedHalfSpread = halfSpread * momentumSpreadAdjust;
   
   // Generate bid orders (below mid price)
   for (let i = 0; i < config.levels; i++) {
@@ -499,8 +273,8 @@ export async function updateSyntheticLiquidity(
   // Broadcast updated order book
   broadcastOrderBook(symbol);
   
-  const state = getOrCreateMarketState(symbol);
-  console.log(`💧 Updated liquidity for ${symbol}: ${orders.length} orders @ $${adjustedMidPrice.toFixed(2)} [${state.phase}] (drift: ${(state.drift * 100).toFixed(3)}%, momentum: ${state.momentum.toFixed(2)}, vol: ${state.volatility.toFixed(2)})`);
+  const drift = getOrCreatePriceDrift(symbol);
+  console.log(`💧 Updated liquidity for ${symbol}: ${orders.length} orders @ $${adjustedMidPrice.toFixed(2)} (drift: ${(drift.drift * 100).toFixed(3)}%, momentum: ${drift.momentum.toFixed(2)})`);
 }
 
 /**
@@ -643,8 +417,7 @@ export function getSyntheticOrderCount(marketSymbol: string): number {
 
 /**
  * Generate synthetic trades to simulate market activity
- * Uses market state machine for realistic patterns (trends, consolidation, breakouts)
- * ANCHORED to Finnhub/oracle price - trades stay within tight bounds of real price
+ * Uses best bid/ask from the orderbook for realistic prices
  */
 export async function generateSyntheticTrades(
   marketSymbol: string,
@@ -657,91 +430,30 @@ export async function generateSyntheticTrades(
     return;
   }
   
-  // Get oracle price - this is our anchor from Finnhub
-  const oraclePrice = getCachedPrice(symbol);
-  if (!oraclePrice) {
-    return; // Don't trade without oracle price
-  }
-  
   // Get best bid and ask from orderbook
-  let bestAsk = getBestAsk(symbol);
-  let bestBid = getBestBid(symbol);
+  const bestAsk = getBestAsk(symbol);
+  const bestBid = getBestBid(symbol);
   
   // Need both bid and ask to generate trades
   if (!bestAsk || !bestBid) {
     return;
   }
   
-  // CRITICAL: Validate orderbook prices against oracle
-  // If bid/ask have drifted more than 0.5% from oracle, reset them to oracle-based prices
-  const maxDriftFromOracle = 0.005; // 0.5%
-  const askDrift = Math.abs(bestAsk - oraclePrice) / oraclePrice;
-  const bidDrift = Math.abs(bestBid - oraclePrice) / oraclePrice;
-  
-  if (askDrift > maxDriftFromOracle || bidDrift > maxDriftFromOracle) {
-    // Orderbook has drifted too far - use oracle-based prices instead
-    const tightSpread = oraclePrice * 0.0001; // 0.01% spread
-    bestAsk = oraclePrice + tightSpread;
-    bestBid = oraclePrice - tightSpread;
-  }
-  
-  // Get market state for intelligent trade generation
-  const state = getOrCreateMarketState(symbol);
-  
-  // Calculate number of trades based on market phase intensity
-  const intensity = getTradeIntensity(state);
-  const baseNumTrades = Math.floor(
+  // Random number of trades this batch
+  const numTrades = Math.floor(
     Math.random() * (config.maxTrades - config.minTrades + 1) + config.minTrades
   );
-  const numTrades = Math.max(1, Math.round(baseNumTrades * intensity));
-  
-  // Get buy probability based on market state
-  const buyProbability = getTradeBias(state);
-  
-  // Sometimes generate trade bursts (clusters of same-direction trades)
-  const isBurst = Math.random() < 0.15; // 15% chance of burst
-  const burstDirection = Math.random() < buyProbability ? "buy" : "sell";
   
   for (let i = 0; i < numTrades; i++) {
-    // Determine trade side based on market state
-    let side: "buy" | "sell";
-    
-    if (isBurst) {
-      // During bursts, all trades go same direction (with small chance of counter-trade)
-      side = Math.random() < 0.85 ? burstDirection : (burstDirection === "buy" ? "sell" : "buy");
-    } else {
-      // Normal trading - use buy probability from market state
-      side = Math.random() < buyProbability ? "buy" : "sell";
-    }
+    // Random side - determines if we trade at bid or ask
+    const side: "buy" | "sell" = Math.random() > 0.5 ? "buy" : "sell";
     
     // Price is best ask for buys, best bid for sells (like a market order)
-    let tradePrice = side === "buy" ? bestAsk : bestBid;
+    const tradePrice = side === "buy" ? bestAsk : bestBid;
     
-    // Add tiny variance for realism (+/- $0.01)
-    tradePrice = tradePrice + (Math.random() - 0.5) * 0.02;
-    
-    // FINAL ANCHOR CHECK: Ensure trade price stays within 0.3% of oracle
-    const tradeDrift = (tradePrice - oraclePrice) / oraclePrice;
-    const maxTradeDrift = 0.003; // 0.3%
-    if (Math.abs(tradeDrift) > maxTradeDrift) {
-      tradePrice = oraclePrice * (1 + (tradeDrift > 0 ? maxTradeDrift : -maxTradeDrift));
-    }
-    
-    // Round to 2 decimal places
-    tradePrice = Math.round(tradePrice * 100) / 100;
-    
-    // Quantity varies by market phase
-    let quantityMultiplier = 1.0;
-    if (state.phase === "breakout") {
-      quantityMultiplier = 1.5 + Math.random() * 1.0; // Larger trades during breakouts
-    } else if (state.phase === "consolidation") {
-      quantityMultiplier = 0.6 + Math.random() * 0.4; // Smaller trades during consolidation
-    } else if (isBurst) {
-      quantityMultiplier = 1.2 + Math.random() * 0.8; // Larger trades during bursts
-    }
-    
+    // Random quantity
     const quantity = roundToLotSize(
-      (Math.random() * (config.maxQuantity - config.minQuantity) + config.minQuantity) * quantityMultiplier,
+      Math.random() * (config.maxQuantity - config.minQuantity) + config.minQuantity,
       market.lotSize
     );
     
@@ -780,7 +492,7 @@ export async function generateSyntheticTrades(
     
     // Update candles with this trade
     try {
-      await updateCandle(symbol, tradePrice, quantity, true, false);
+      await updateCandleFromTrade(symbol, tradePrice, quantity);
     } catch (err) {
       // Candle update is non-critical, don't fail on error
     }

@@ -1,7 +1,7 @@
 import { Market, IMarket, REQUIRED_MARKETS } from "../models/market.model";
 import { getQuote } from "./finnhub.service";
 import { broadcastPriceUpdate } from "./websocket.service";
-import { updateCandle } from "./candle.service";
+import { setLastKnownPrice } from "./candle.service";
 
 // In-memory cache of market prices
 const priceCache = new Map<string, { price: number; updatedAt: Date }>();
@@ -84,8 +84,8 @@ export async function fetchAndUpdatePrice(marketSymbol: string): Promise<number 
     
     await updateOraclePrice(marketSymbol, price);
     
-    // Update candle data with new price
-    await updateCandle(marketSymbol, price, 0, false);
+    // Track price for candle generation (used when no trades)
+    setLastKnownPrice(marketSymbol, price);
     
     // Broadcast price update via WebSocket
     broadcastPriceUpdate(marketSymbol, {

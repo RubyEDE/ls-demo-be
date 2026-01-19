@@ -216,6 +216,39 @@ export async function loadOrderBookFromDB(marketSymbol: string): Promise<void> {
 }
 
 /**
+ * Initialize orderbooks for all active markets (real orders only, no synthetic)
+ * Call this at startup to load existing user orders into in-memory orderbooks
+ */
+export async function initializeOrderBooks(): Promise<void> {
+  const { Market } = await import("../models/market.model");
+  const markets = await Market.find({ status: "active" });
+  
+  console.log("📚 Initializing orderbooks for active markets...");
+  
+  for (const market of markets) {
+    const symbol = market.symbol.toUpperCase();
+    
+    // Clear any existing in-memory book
+    clearOrderBook(symbol);
+    
+    // Load ONLY real user orders (not synthetic)
+    const orders = await Order.find({
+      marketSymbol: symbol,
+      status: { $in: ["open", "partial"] },
+      isSynthetic: { $ne: true },  // Exclude synthetic orders
+    });
+    
+    for (const order of orders) {
+      addToOrderBook(order);
+    }
+    
+    console.log(`   📖 ${symbol}: ${orders.length} real orders loaded`);
+  }
+  
+  console.log("✅ Orderbooks initialized (real orders only)");
+}
+
+/**
  * Broadcast full order book snapshot
  */
 export function broadcastOrderBook(marketSymbol: string, depth: number = 20): void {

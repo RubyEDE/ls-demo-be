@@ -15,6 +15,7 @@ import {
 } from "./websocket.service";
 import { lockBalanceByAddress, unlockBalanceByAddress, getBalanceByAddress } from "./balance.service";
 import { handleTradeExecution } from "./position.service";
+import { updateCandleFromTrade } from "./candle.service";
 
 interface PlaceOrderParams {
   marketSymbol: string;
@@ -68,10 +69,6 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
   // Validate quantity
   if (quantity < market.minOrderSize) {
     return { success: false, error: `Minimum order size is ${market.minOrderSize}` };
-  }
-  
-  if (quantity > market.maxOrderSize) {
-    return { success: false, error: `Maximum order size is ${market.maxOrderSize}` };
   }
   
   // Round to lot size
@@ -297,6 +294,11 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
         quantity: trade.quantity,
         side: trade.side,
         timestamp: Date.now(),
+      });
+      
+      // Update candles with this trade
+      updateCandleFromTrade(trade.marketSymbol, trade.price, trade.quantity).catch(err => {
+        console.error("Error updating candle from trade:", err);
       });
       
       // Handle position update for taker (if not synthetic)
