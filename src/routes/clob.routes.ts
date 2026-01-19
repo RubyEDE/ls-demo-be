@@ -255,6 +255,13 @@ router.post("/orders", authMiddleware, async (req: Request, res: Response) => {
         quantity: t.quantity,
         side: t.side,
       })),
+      newAchievements: result.newAchievements?.map((a) => ({
+        id: a.achievement.id,
+        name: a.achievement.name,
+        description: a.achievement.description,
+        icon: a.achievement.icon,
+        points: a.achievement.points,
+      })),
     });
   } catch (error) {
     console.error("Error placing order:", error);
@@ -581,11 +588,35 @@ router.post("/positions/:marketSymbol/close", authMiddleware, async (req: Reques
       return res.status(400).json({ error: "NO_PRICE", message: "No price available for market" });
     }
     
-    // Determine close quantity
-    const closeQty = quantity && quantity < position.size ? quantity : position.size;
-    
-    // Place a market order to close
+    // Calculate the close side (opposite of position)
     const closeSide = position.side === "long" ? "sell" : "buy";
+    
+    // Check for existing pending close orders to prevent duplicate closes
+    const existingCloseOrders = await getUserOpenOrders(authReq.auth!.address, marketSymbol);
+    const pendingCloseQuantity = existingCloseOrders
+      .filter(o => o.side === closeSide && o.reduceOnly)
+      .reduce((sum, o) => sum + o.remainingQuantity, 0);
+    
+    // Calculate available size to close (position size minus pending close orders)
+    const availableToClose = position.size - pendingCloseQuantity;
+    
+    if (availableToClose <= 0) {
+      return res.status(400).json({
+        error: "CLOSE_PENDING",
+        message: "A close order is already pending for this position",
+      });
+    }
+    
+    // Determine close quantity (capped by available size)
+    let closeQty = quantity && quantity < position.size ? quantity : position.size;
+    closeQty = Math.min(closeQty, availableToClose);
+    
+    if (closeQty <= 0) {
+      return res.status(400).json({
+        error: "CLOSE_PENDING",
+        message: "Cannot close more than available size after pending orders",
+      });
+    }
     
     const result = await placeOrder({
       marketSymbol,

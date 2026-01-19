@@ -145,6 +145,19 @@ router.post(
         total: (result.balance?.free || 0) + (result.balance?.locked || 0),
       },
       nextRequestAt: result.nextRequestAt?.toISOString(),
+      newAchievements: result.newAchievements?.map((a) => ({
+        id: a.achievement.id,
+        name: a.achievement.name,
+        description: a.achievement.description,
+        icon: a.achievement.icon,
+        points: a.achievement.points,
+      })),
+      referral: result.referralCompleted
+        ? {
+            completed: true,
+            referrerRewarded: result.referrerRewarded,
+          }
+        : undefined,
     });
   }
 );

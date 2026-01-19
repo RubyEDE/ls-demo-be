@@ -7,11 +7,14 @@ import authRoutes from "./routes/auth.routes";
 import faucetRoutes from "./routes/faucet.routes";
 import finnhubRoutes from "./routes/finnhub.routes";
 import clobRoutes from "./routes/clob.routes";
+import achievementRoutes from "./routes/achievement.routes";
+import referralRoutes from "./routes/referral.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
 import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.service";
 import { initializeMarkets, startRequiredPriceUpdates } from "./services/market.service";
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
 import { initializeOrderBooks } from "./services/orderbook.service";
+import { initializeAchievements } from "./services/achievement.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -41,6 +44,8 @@ app.use("/auth", authRoutes);
 app.use("/faucet", faucetRoutes);
 app.use("/finnhub", finnhubRoutes);
 app.use("/clob", clobRoutes);
+app.use("/achievements", achievementRoutes);
+app.use("/referrals", referralRoutes);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -54,6 +59,9 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // Connect to database and start server
 async function start() {
   await connectDatabase();
+  
+  // Initialize achievements
+  await initializeAchievements();
   
   // Initialize perpetual markets
   await initializeMarkets();
@@ -89,6 +97,26 @@ Available endpoints:
     POST /faucet/lock            - Lock free balance
     POST /faucet/unlock          - Unlock locked balance
     GET  /faucet/global-stats    - Get global faucet stats (public)
+  
+  Achievements:
+    GET  /achievements              - Get all achievements (public)
+    GET  /achievements/category/:cat- Get achievements by category
+    GET  /achievements/me           - Get user's achievements with progress
+    GET  /achievements/me/grouped   - Get achievements grouped by progression
+    GET  /achievements/me/stats     - Get user's achievement stats
+    GET  /achievements/me/points    - Get user's total points
+    GET  /achievements/leaderboard  - Get achievement leaderboard (public)
+    GET  /achievements/user/:addr   - Get user's public achievement profile
+  
+  Referrals:
+    GET  /referrals/code            - Get user's referral code (auth required)
+    GET  /referrals/validate/:code  - Validate a referral code (public)
+    POST /referrals/apply           - Apply referral code (auth required)
+    GET  /referrals/stats           - Get user's referral stats (auth required)
+    GET  /referrals/list            - Get list of referrals (auth required)
+    GET  /referrals/referred-by     - Check who referred you (auth required)
+    GET  /referrals/leaderboard     - Get referral leaderboard (public)
+    GET  /referrals/global-stats    - Get global referral stats (public)
   
   Finnhub (Market Data):
     GET  /finnhub/quote/:symbol        - Get stock quote

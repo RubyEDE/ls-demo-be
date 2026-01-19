@@ -2,6 +2,8 @@ import { Types } from "mongoose";
 import { FaucetRequest, IFaucetRequest } from "../models/faucet-request.model";
 import { creditBalance, getOrCreateBalance } from "./balance.service";
 import { IBalance } from "../models/balance.model";
+import { checkFaucetAchievements, AchievementUnlockResult } from "./achievement.service";
+import { completeReferral } from "./referral.service";
 
 // Faucet configuration
 const FAUCET_AMOUNT = 100; // Amount given per request
@@ -13,6 +15,9 @@ export interface FaucetRequestResult {
   balance?: IBalance;
   nextRequestAt?: Date;
   error?: string;
+  newAchievements?: AchievementUnlockResult[];
+  referralCompleted?: boolean;
+  referrerRewarded?: number;
 }
 
 export interface FaucetStats {
@@ -109,11 +114,31 @@ export async function requestFromFaucet(
   // Calculate next available request time
   const newNextRequestAt = new Date(Date.now() + COOLDOWN_HOURS * 60 * 60 * 1000);
   
+  // Get total faucet claims and check for achievements
+  const totalClaims = await FaucetRequest.countDocuments({ userId });
+  const newAchievements = await checkFaucetAchievements(userId, address, totalClaims);
+  
+  // Complete referral on first faucet use (user is now considered "referred")
+  let referralCompleted = false;
+  let referrerRewarded = 0;
+  
+  if (totalClaims === 1) {
+    // This is the first faucet claim - complete any pending referral
+    const referralResult = await completeReferral(userId, address);
+    if (referralResult.success && referralResult.rewardAmount) {
+      referralCompleted = true;
+      referrerRewarded = referralResult.rewardAmount;
+    }
+  }
+  
   return {
     success: true,
     amount: FAUCET_AMOUNT,
     balance: creditResult.balance,
     nextRequestAt: newNextRequestAt,
+    newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
+    referralCompleted: referralCompleted || undefined,
+    referrerRewarded: referrerRewarded || undefined,
   };
 }
 

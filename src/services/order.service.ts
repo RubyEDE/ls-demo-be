@@ -16,6 +16,7 @@ import {
 import { lockBalanceByAddress, unlockBalanceByAddress, getBalanceByAddress } from "./balance.service";
 import { handleTradeExecution } from "./position.service";
 import { updateCandleFromTrade } from "./candle.service";
+import { checkFirstOrderAchievement, AchievementUnlockResult } from "./achievement.service";
 
 interface PlaceOrderParams {
   marketSymbol: string;
@@ -33,6 +34,7 @@ interface PlaceOrderResult {
   order?: IOrder;
   trades?: ITrade[];
   error?: string;
+  newAchievements?: AchievementUnlockResult[];
 }
 
 interface CancelOrderResult {
@@ -187,10 +189,24 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     });
   }
   
+  // Check for first order achievement
+  const newAchievements: AchievementUnlockResult[] = [];
+  try {
+    console.log(`🔍 Checking first order achievement for ${userAddress}...`);
+    const firstOrderAchievement = await checkFirstOrderAchievement(userAddress);
+    if (firstOrderAchievement) {
+      console.log(`✅ First order achievement result:`, firstOrderAchievement.achievement.name);
+      newAchievements.push(firstOrderAchievement);
+    }
+  } catch (error) {
+    console.error(`❌ Error checking first order achievement:`, error);
+  }
+  
   return {
     success: true,
     order: remainingOrder,
     trades,
+    newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
   };
 }
 
