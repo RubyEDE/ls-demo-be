@@ -497,3 +497,4 @@ export async function getRecentTrades(
     .sort({ createdAt: -1 })
     .limit(limit);
 }
+

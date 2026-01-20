@@ -362,6 +362,7 @@ async function testReferralSystem(): Promise<void> {
   const faucetResponse = await fetch(`${BASE_URL}/faucet/request`, {
     method: "POST",
     headers: referee1Headers,
+    body: JSON.stringify({}), // No referral code needed - already applied
   });
   
   if (!faucetResponse.ok) {
@@ -462,10 +463,10 @@ async function testReferralSystem(): Promise<void> {
   console.log("    ✅ TEST 7 PASSED: Referee can see referral info\n");
   
   // ============================================
-  // TEST 8: Multiple Referrals
+  // TEST 8: Direct Referral via Faucet (One-Step Flow)
   // ============================================
   console.log("=".repeat(60));
-  console.log("TEST 8: Multiple Referrals");
+  console.log("TEST 8: Direct Referral via Faucet (One-Step Flow)");
   console.log("=".repeat(60));
   
   console.log("\n8.1 Authenticating referee 2...");
@@ -477,20 +478,28 @@ async function testReferralSystem(): Promise<void> {
     "Content-Type": "application/json",
   };
   
-  console.log("8.2 Applying referral code for referee 2...");
-  const apply2Response = await fetch(`${BASE_URL}/referrals/apply`, {
+  console.log("8.2 Referee 2 uses faucet WITH referral code (one-step flow)...");
+  const faucet2Response = await fetch(`${BASE_URL}/faucet/request`, {
     method: "POST",
     headers: referee2Headers,
-    body: JSON.stringify({ referralCode }),
+    body: JSON.stringify({ referralCode }), // Pass referral code directly!
   });
   
-  if (!apply2Response.ok) {
-    const error = await apply2Response.json() as ErrorResponse;
-    throw new Error(`Failed to apply referral for referee 2: ${error.message}`);
+  if (!faucet2Response.ok) {
+    const error = await faucet2Response.json() as ErrorResponse;
+    throw new Error(`Faucet request failed: ${error.message}`);
   }
-  console.log("    ✅ Referral code applied\n");
   
-  console.log("8.3 Checking referrer stats (should have 2 total, 1 pending)...");
+  const faucet2Result = (await faucet2Response.json()) as FaucetRequestResponse;
+  console.log(`    Faucet amount: ${faucet2Result.amount}`);
+  console.log(`    Referral info: ${JSON.stringify(faucet2Result.referral)}`);
+  
+  if (!faucet2Result.referral?.completed) {
+    throw new Error("Referral should have been completed on faucet use with code");
+  }
+  console.log("    ✅ One-step referral flow works!\n");
+  
+  console.log("8.3 Checking referrer stats (should have 2 completed)...");
   const multiStatsResponse = await fetch(`${BASE_URL}/referrals/stats`, {
     headers: referrerHeaders,
   });
@@ -498,10 +507,10 @@ async function testReferralSystem(): Promise<void> {
   const multiStats = (await multiStatsResponse.json()) as ReferralStats;
   console.log(`    Total: ${multiStats.totalReferrals}, Completed: ${multiStats.completedReferrals}, Pending: ${multiStats.pendingReferrals}`);
   
-  if (multiStats.totalReferrals !== 2 || multiStats.completedReferrals !== 1 || multiStats.pendingReferrals !== 1) {
-    throw new Error(`Expected 2 total, 1 completed, 1 pending`);
+  if (multiStats.totalReferrals !== 2 || multiStats.completedReferrals !== 2 || multiStats.pendingReferrals !== 0) {
+    throw new Error(`Expected 2 total, 2 completed, 0 pending`);
   }
-  console.log("    ✅ TEST 8 PASSED: Multiple referrals tracked correctly\n");
+  console.log("    ✅ TEST 8 PASSED: One-step referral flow works correctly\n");
   
   // ============================================
   // TEST 9: Global Stats & Leaderboard

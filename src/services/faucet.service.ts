@@ -3,7 +3,7 @@ import { FaucetRequest, IFaucetRequest } from "../models/faucet-request.model";
 import { creditBalance, getOrCreateBalance } from "./balance.service";
 import { IBalance } from "../models/balance.model";
 import { checkFaucetAchievements, AchievementUnlockResult } from "./achievement.service";
-import { completeReferral } from "./referral.service";
+import { completeReferral, applyReferralCode } from "./referral.service";
 
 // Faucet configuration
 const FAUCET_AMOUNT = 100; // Amount given per request
@@ -66,12 +66,14 @@ export async function canRequestFromFaucet(
 
 /**
  * Request tokens from the faucet
+ * @param referralCode - Optional referral code to apply on first claim
  */
 export async function requestFromFaucet(
   userId: Types.ObjectId,
   address: string,
   ipAddress?: string,
-  userAgent?: string
+  userAgent?: string,
+  referralCode?: string
 ): Promise<FaucetRequestResult> {
   const { canRequest, nextRequestAt } = await canRequestFromFaucet(userId);
   
@@ -81,6 +83,21 @@ export async function requestFromFaucet(
       nextRequestAt: nextRequestAt!,
       error: `You can only request once every ${COOLDOWN_HOURS} hours`,
     };
+  }
+  
+  // Check if this is the first faucet claim (before recording)
+  const existingClaims = await FaucetRequest.countDocuments({ userId });
+  const isFirstClaim = existingClaims === 0;
+  
+  // If this is the first claim and a referral code is provided, apply it first
+  if (isFirstClaim && referralCode) {
+    const applyResult = await applyReferralCode(userId, address, referralCode);
+    if (!applyResult.success) {
+      console.log(`Referral code application failed: ${applyResult.error}`);
+      // Don't fail the faucet request, just log it
+    } else {
+      console.log(`✅ Referral code ${referralCode} applied for ${address}`);
+    }
   }
   
   // Ensure balance exists
@@ -128,6 +145,7 @@ export async function requestFromFaucet(
     if (referralResult.success && referralResult.rewardAmount) {
       referralCompleted = true;
       referrerRewarded = referralResult.rewardAmount;
+      console.log(`🎉 Referral completed! Referrer rewarded ${referralResult.rewardAmount} credits`);
     }
   }
   

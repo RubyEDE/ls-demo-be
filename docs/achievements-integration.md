@@ -140,6 +140,17 @@ interface GroupedProgression {
 |----|------|-------------|--------|
 | `first_order` | First Trade | Place your first order | 15 |
 
+### Referral Achievements (Progression)
+
+| ID | Name | Description | Threshold | Points |
+|----|------|-------------|-----------|--------|
+| `referral_1` | First Friend | Refer your first friend | 1 | 20 |
+| `referral_5` | Social Butterfly | Refer 5 friends | 5 | 50 |
+| `referral_10` | Community Builder | Refer 10 friends | 10 | 100 |
+| `referral_30` | Network King | Refer 30 friends | 30 | 200 |
+| `referral_50` | Viral Marketer | Refer 50 friends | 50 | 350 |
+| `referral_100` | Legendary Recruiter | Refer 100 friends | 100 | 500 |
+
 ## API Examples
 
 ### Get All Achievements (Public)
@@ -520,6 +531,45 @@ The `icon` field contains a string identifier. Suggested icon mappings:
 | `glass-water` | Glass of water |
 | `trophy` | Trophy/cup |
 | `shopping-cart` | Shopping cart (trading) |
+| `user-plus` | User with plus (referral) |
+| `users` | Multiple users |
+| `users-round` | Round users icon |
+| `crown` | Crown |
+| `megaphone` | Megaphone |
+| `star` | Star |
+
+## Sync Achievements
+
+If a user has existing progress but is missing achievements (e.g., after new achievements are added), use the sync endpoint:
+
+### POST /achievements/sync
+
+**Requires Authentication**
+
+Syncs achievements based on current stats (faucet claims, referrals, etc.). This retroactively awards any missing achievements.
+
+```json
+// Response
+{
+  "synced": true,
+  "newAchievements": [
+    {
+      "id": "referral_1",
+      "name": "First Referral",
+      "description": "Refer your first user",
+      "icon": "user-plus",
+      "points": 20
+    }
+  ],
+  "stats": {
+    "totalUnlocked": 2,
+    "totalAchievements": 11,
+    "totalPoints": 30,
+    "maxPoints": 470,
+    "completionPercentage": 18.18
+  }
+}
+```
 
 ## Integration Notes
 
@@ -528,3 +578,4 @@ The `icon` field contains a string identifier. Suggested icon mappings:
 3. **Public endpoints** don't require authentication and can be cached
 4. **Progression achievements** share a `progressionGroup` and should be displayed together
 5. **Sort by `progressionOrder`** when displaying progression chains
+6. **Call sync endpoint** on app load or after updates to catch any missing achievements

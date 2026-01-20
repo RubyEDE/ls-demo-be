@@ -15,10 +15,12 @@ The referral system allows users to invite others to the platform. A referral is
 
 ## User Flow
 
+### One-Step Flow (Recommended) ⭐
+
 ```
-┌─────────────────┐     Share Code      ┌─────────────────┐
+┌─────────────────┐     Share Link      ┌─────────────────┐
 │   Existing      │ ─────────────────▶  │    New User     │
-│     User        │                     │   (Referee)     │
+│     User        │  ?ref=ABCD1234      │   (Referee)     │
 └─────────────────┘                     └─────────────────┘
         │                                       │
         │                                       ▼
@@ -28,16 +30,10 @@ The referral system allows users to invite others to the platform. A referral is
         │                               └───────────────┘
         │                                       │
         │                                       ▼
-        │                               ┌───────────────┐
-        │                               │ Apply Referral│
-        │                               │     Code      │
-        │                               └───────────────┘
-        │                                       │
-        │                                       ▼
-        │                               ┌───────────────┐
-        │                               │  Use Faucet   │
-        │                               │ (First Time)  │
-        │                               └───────────────┘
+        │                               ┌───────────────────────────┐
+        │                               │  POST /faucet/request     │
+        │                               │  { "referralCode": "..." }│
+        │                               └───────────────────────────┘
         │                                       │
         ▼                                       ▼
 ┌─────────────────┐                     ┌───────────────┐
@@ -45,6 +41,12 @@ The referral system allows users to invite others to the platform. A referral is
 │  (+10 Credits)  │     Auto-trigger    │  Completed    │
 └─────────────────┘                     └───────────────┘
 ```
+
+**Frontend Implementation:**
+1. Extract `ref` param from URL: `new URLSearchParams(window.location.search).get('ref')`
+2. Store it (localStorage or state)
+3. When user claims faucet, pass it: `POST /faucet/request { "referralCode": "ABCD1234" }`
+4. Done! Referral is applied and completed in one API call
 
 ## API Reference
 
@@ -251,13 +253,18 @@ GET /referrals/referred-by
 
 ---
 
-## Faucet Response with Referral Info
+## Faucet with Referral Code (One-Step Flow) ⭐ RECOMMENDED
 
-When a referred user uses the faucet for the first time, the response includes referral completion info:
+The simplest way to handle referrals is to pass the referral code directly when claiming from the faucet. This is the **recommended approach** for frontend integration.
 
 ```http
 POST /faucet/request
 Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "referralCode": "ABCD1234XY5Z"
+}
 ```
 
 **Response (200 OK) - First Faucet Use with Referral:**
@@ -277,6 +284,12 @@ Authorization: Bearer <token>
   }
 }
 ```
+
+**How it works:**
+1. Frontend extracts `?ref=CODE` from URL
+2. When user claims faucet, pass the code in the request body
+3. Backend automatically applies the referral AND completes it in one step
+4. Referrer gets credited immediately
 
 ---
 

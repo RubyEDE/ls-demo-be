@@ -19,6 +19,8 @@
     "test:candle": "tsx src/test/candle.test.ts",
     "test:order-edge-cases": "tsx src/test/order-edge-cases.test.ts",
     "test:achievements": "tsx src/test/achievements/faucet-achievements.test.ts",
+    "test:achievements:faucet": "tsx src/test/achievements/faucet-achievements.test.ts",
+    "test:achievements:referral": "tsx src/test/achievements/referral-achievements.test.ts",
     "test": "tsx src/test/auth.test.ts && tsx src/test/faucet.test.ts && tsx src/test/finnhub.test.ts"
   },
   "keywords": [

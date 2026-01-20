@@ -1,7 +1,9 @@
 import { Types } from "mongoose";
 import { Referral, IReferral } from "../models/referral.model";
 import { User, IUser, generateReferralCode } from "../models/user.model";
+import { FaucetRequest } from "../models/faucet-request.model";
 import { creditBalance } from "./balance.service";
+import { checkReferralAchievements, AchievementUnlockResult } from "./achievement.service";
 
 // Referral configuration
 const REFERRAL_REWARD_AMOUNT = 10; // Amount credited to referrer when referee uses faucet
@@ -32,6 +34,7 @@ export interface CompleteReferralResult {
   error?: string;
   referral?: IReferral;
   rewardAmount?: number;
+  newAchievements?: AchievementUnlockResult[];
 }
 
 /**
@@ -87,20 +90,58 @@ export async function applyReferralCode(
     return { success: false, error: "User has already been referred" };
   }
   
-  // Create pending referral
+  // Check if user has already claimed from faucet
+  const faucetClaimCount = await FaucetRequest.countDocuments({ userId: refereeId });
+  const hasClaimedFaucet = faucetClaimCount > 0;
+  
+  // Create referral - if user already claimed faucet, complete it immediately
   const referral = await Referral.create({
     referrerId: referrer._id,
     refereeId,
     referrerAddress: referrer.address,
     refereeAddress: refereeAddress.toLowerCase(),
     referralCode: normalizedCode,
-    status: "pending",
-    rewardAmount: 0,
+    status: hasClaimedFaucet ? "completed" : "pending",
+    rewardAmount: hasClaimedFaucet ? REFERRAL_REWARD_AMOUNT : 0,
     rewardCredited: false,
+    completedAt: hasClaimedFaucet ? new Date() : undefined,
   });
   
   // Update referee's referredBy field
   await User.findByIdAndUpdate(refereeId, { referredBy: normalizedCode });
+  
+  // If user already claimed faucet, credit referrer immediately
+  if (hasClaimedFaucet) {
+    console.log(`📊 Referee already claimed faucet - completing referral immediately`);
+    
+    const creditResult = await creditBalance(
+      referrer._id as Types.ObjectId,
+      referrer.address,
+      REFERRAL_REWARD_AMOUNT,
+      `Referral reward for ${refereeAddress.slice(0, 6)}...${refereeAddress.slice(-4)}`,
+      `referral_${referral._id}`
+    );
+    
+    if (creditResult.success) {
+      referral.rewardCredited = true;
+      await referral.save();
+      console.log(`🎉 Referral completed immediately! Referrer ${referrer.address} rewarded ${REFERRAL_REWARD_AMOUNT} credits`);
+      
+      // Check for referral achievements
+      const completedReferrals = await Referral.countDocuments({
+        referrerId: referrer._id,
+        status: "completed",
+      });
+      
+      await checkReferralAchievements(
+        referrer._id as Types.ObjectId,
+        referrer.address,
+        completedReferrals
+      );
+    } else {
+      console.error(`❌ Failed to credit referrer: ${creditResult.error}`);
+    }
+  }
   
   return { success: true, referral };
 }
@@ -154,10 +195,29 @@ export async function completeReferral(
   referral.completedAt = new Date();
   await referral.save();
   
+  // Check for referral achievements for the referrer
+  const completedReferrals = await Referral.countDocuments({
+    referrerId: referral.referrerId,
+    status: "completed",
+  });
+  
+  console.log(`📊 Referral completed! Referrer ${referrer.address} now has ${completedReferrals} completed referrals`);
+  
+  const newAchievements = await checkReferralAchievements(
+    referral.referrerId,
+    referrer.address,
+    completedReferrals
+  );
+  
+  if (newAchievements.length > 0) {
+    console.log(`🎉 Referrer unlocked ${newAchievements.length} new achievements!`);
+  }
+  
   return {
     success: true,
     referral,
     rewardAmount: REFERRAL_REWARD_AMOUNT,
+    newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
   };
 }
 

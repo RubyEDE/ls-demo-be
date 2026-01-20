@@ -15,6 +15,7 @@ import { initializeMarkets, startRequiredPriceUpdates } from "./services/market.
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
 import { initializeOrderBooks } from "./services/orderbook.service";
 import { initializeAchievements } from "./services/achievement.service";
+import { startLiquidationEngine } from "./services/liquidation.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -78,6 +79,9 @@ async function start() {
   // Initialize orderbooks with real user orders (no synthetic liquidity)
   await initializeOrderBooks();
   
+  // Start liquidation engine (checks every second)
+  startLiquidationEngine(1000);
+  
   httpServer.listen(config.port, () => {
     console.log(`🚀 EVM Auth Server running on http://localhost:${config.port}`);
     console.log(`📡 WebSocket server running on ws://localhost:${config.port}`);
@@ -91,7 +95,7 @@ Available endpoints:
   Faucet:
     GET  /faucet/balance         - Get user balance
     GET  /faucet/balance/history - Get balance change history
-    POST /faucet/request         - Request tokens (once per 24h)
+    POST /faucet/request         - Request tokens (once per 24h, body: { referralCode? })
     GET  /faucet/stats           - Get user faucet stats
     GET  /faucet/history         - Get faucet request history
     POST /faucet/lock            - Lock free balance

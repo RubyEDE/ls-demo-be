@@ -103,6 +103,103 @@ const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     },
     isActive: true,
   },
+  // Referral progression achievements
+  {
+    id: "referral_1",
+    name: "First Friend",
+    description: "Refer your first friend",
+    category: "referral",
+    icon: "user-plus",
+    points: 20,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 1,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "referral_5",
+    name: "Social Butterfly",
+    description: "Refer 5 friends",
+    category: "referral",
+    icon: "users",
+    points: 50,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 2,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 5,
+    },
+    isActive: true,
+  },
+  {
+    id: "referral_10",
+    name: "Community Builder",
+    description: "Refer 10 friends",
+    category: "referral",
+    icon: "users-round",
+    points: 100,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 3,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 10,
+    },
+    isActive: true,
+  },
+  {
+    id: "referral_30",
+    name: "Network King",
+    description: "Refer 30 friends",
+    category: "referral",
+    icon: "crown",
+    points: 200,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 4,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 30,
+    },
+    isActive: true,
+  },
+  {
+    id: "referral_50",
+    name: "Viral Marketer",
+    description: "Refer 50 friends",
+    category: "referral",
+    icon: "megaphone",
+    points: 350,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 5,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 50,
+    },
+    isActive: true,
+  },
+  {
+    id: "referral_100",
+    name: "Legendary Recruiter",
+    description: "Refer 100 friends",
+    category: "referral",
+    icon: "star",
+    points: 500,
+    isProgression: true,
+    progressionGroup: "referrals",
+    progressionOrder: 6,
+    requirement: {
+      type: "completed_referrals",
+      threshold: 100,
+    },
+    isActive: true,
+  },
 ];
 
 export interface AchievementUnlockResult {
@@ -291,12 +388,17 @@ export async function checkProgressionAchievements(
   requirementType: string,
   currentCount: number
 ): Promise<AchievementUnlockResult[]> {
+  console.log(`🔍 checkProgressionAchievements: type=${requirementType}, count=${currentCount}`);
+  
   // Find all achievements that match this requirement type
   const achievements = await Achievement.find({
     "requirement.type": requirementType,
     "requirement.threshold": { $lte: currentCount },
     isActive: true,
   }).sort({ "requirement.threshold": 1 });
+  
+  console.log(`🔍 Found ${achievements.length} matching achievements for ${requirementType}`);
+  achievements.forEach(a => console.log(`   - ${a.id}: threshold ${a.requirement.threshold}`));
   
   const newlyUnlocked: AchievementUnlockResult[] = [];
   
@@ -321,6 +423,63 @@ export async function checkFaucetAchievements(
   totalFaucetClaims: number
 ): Promise<AchievementUnlockResult[]> {
   return checkProgressionAchievements(userId, address, "faucet_claims", totalFaucetClaims);
+}
+
+/**
+ * Check referral achievements for a user
+ * Call this after a successful referral completion
+ */
+export async function checkReferralAchievements(
+  userId: Types.ObjectId,
+  address: string,
+  totalCompletedReferrals: number
+): Promise<AchievementUnlockResult[]> {
+  console.log(`🔍 Checking referral achievements for ${address} with ${totalCompletedReferrals} completed referrals`);
+  const results = await checkProgressionAchievements(userId, address, "completed_referrals", totalCompletedReferrals);
+  console.log(`🔍 Referral achievement check result: ${results.length} new achievements`);
+  if (results.length > 0) {
+    results.forEach(r => console.log(`   🏆 Unlocked: ${r.achievement.name}`));
+  }
+  return results;
+}
+
+/**
+ * Sync achievements for a user based on their current stats
+ * This can retroactively award achievements for existing progress
+ */
+export async function syncUserAchievements(
+  userId: Types.ObjectId,
+  address: string,
+  stats: {
+    faucetClaims?: number;
+    completedReferrals?: number;
+  }
+): Promise<AchievementUnlockResult[]> {
+  console.log(`🔄 Syncing achievements for ${address}...`);
+  const allNewAchievements: AchievementUnlockResult[] = [];
+  
+  if (stats.faucetClaims && stats.faucetClaims > 0) {
+    const faucetResults = await checkProgressionAchievements(
+      userId,
+      address,
+      "faucet_claims",
+      stats.faucetClaims
+    );
+    allNewAchievements.push(...faucetResults);
+  }
+  
+  if (stats.completedReferrals && stats.completedReferrals > 0) {
+    const referralResults = await checkProgressionAchievements(
+      userId,
+      address,
+      "completed_referrals",
+      stats.completedReferrals
+    );
+    allNewAchievements.push(...referralResults);
+  }
+  
+  console.log(`🔄 Sync complete: ${allNewAchievements.length} achievements awarded`);
+  return allNewAchievements;
 }
 
 /**

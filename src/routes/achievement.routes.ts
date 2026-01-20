@@ -11,7 +11,10 @@ import {
   getUserAchievementStats,
   getUserAchievementPoints,
   getAchievementLeaderboard,
+  syncUserAchievements,
 } from "../services/achievement.service";
+import { FaucetRequest } from "../models/faucet-request.model";
+import { Referral } from "../models/referral.model";
 
 const router = Router();
 
@@ -284,5 +287,60 @@ router.get("/user/:address", async (req, res: Response) => {
     },
   });
 });
+
+/**
+ * POST /achievements/sync
+ * Sync achievements for current user based on their stats
+ * This retroactively awards any missing achievements
+ */
+router.post(
+  "/sync",
+  authMiddleware,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const address = req.auth?.address;
+    
+    if (!address) {
+      res.status(401).json({ error: "UNAUTHORIZED", message: "Not authenticated" });
+      return;
+    }
+    
+    const user = await findUserByAddress(address);
+    
+    if (!user) {
+      res.status(404).json({ error: "NOT_FOUND", message: "User not found" });
+      return;
+    }
+    
+    const userId = user._id as Types.ObjectId;
+    
+    // Get current stats
+    const [faucetClaims, completedReferrals] = await Promise.all([
+      FaucetRequest.countDocuments({ userId }),
+      Referral.countDocuments({ referrerId: userId, status: "completed" }),
+    ]);
+    
+    console.log(`📊 Syncing achievements for ${address}: faucet=${faucetClaims}, referrals=${completedReferrals}`);
+    
+    const newAchievements = await syncUserAchievements(userId, address, {
+      faucetClaims,
+      completedReferrals,
+    });
+    
+    const stats = await getUserAchievementStats(userId);
+    
+    res.json({
+      synced: true,
+      newAchievements: newAchievements.map(a => ({
+        id: a.achievement.id,
+        name: a.achievement.name,
+        description: a.achievement.description,
+        category: a.achievement.category,
+        icon: a.achievement.icon,
+        points: a.achievement.points,
+      })),
+      stats,
+    });
+  }
+);
 
 export default router;

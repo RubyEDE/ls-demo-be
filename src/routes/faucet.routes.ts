@@ -98,12 +98,14 @@ router.get(
 /**
  * POST /faucet/request
  * Request tokens from the faucet (once per day)
+ * Body: { referralCode?: string } - Optional referral code to apply on first claim
  */
 router.post(
   "/request",
   authMiddleware,
   async (req: AuthenticatedRequest, res: Response) => {
     const address = req.auth?.address;
+    const { referralCode } = req.body || {};
     
     if (!address) {
       res.status(401).json({ error: "UNAUTHORIZED", message: "Not authenticated" });
@@ -124,7 +126,8 @@ router.post(
       user._id as Types.ObjectId,
       address,
       ipAddress,
-      userAgent
+      userAgent,
+      referralCode
     );
     
     if (!result.success) {

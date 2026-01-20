@@ -1,5 +1,10 @@
 import mongoose, { Document, Schema } from "mongoose";
 
+export interface IAchievementRequirement {
+  type: string; // e.g., "faucet_claims", "trades_executed"
+  threshold: number; // Number required to unlock
+}
+
 export interface IAchievement extends Document {
   id: string; // Unique identifier (e.g., "faucet_first_claim")
   name: string;
@@ -10,14 +15,20 @@ export interface IAchievement extends Document {
   isProgression: boolean; // Whether this is part of a progression chain
   progressionGroup?: string; // Group ID for progression achievements
   progressionOrder?: number; // Order in progression chain
-  requirement: {
-    type: string; // e.g., "faucet_claims", "trades_executed"
-    threshold: number; // Number required to unlock
-  };
+  requirement: IAchievementRequirement;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
+
+// Separate schema for requirement to avoid Mongoose "type" keyword conflict
+const requirementSchema = new Schema<IAchievementRequirement>(
+  {
+    type: { type: String, required: true },
+    threshold: { type: Number, required: true },
+  },
+  { _id: false }
+);
 
 const achievementSchema = new Schema<IAchievement>(
   {
@@ -61,14 +72,8 @@ const achievementSchema = new Schema<IAchievement>(
       type: Number,
     },
     requirement: {
-      type: {
-        type: String,
-        required: true,
-      },
-      threshold: {
-        type: Number,
-        required: true,
-      },
+      type: requirementSchema,
+      required: true,
     },
     isActive: {
       type: Boolean,
