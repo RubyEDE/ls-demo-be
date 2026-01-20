@@ -16,7 +16,13 @@ import {
 import { lockBalanceByAddress, unlockBalanceByAddress, getBalanceByAddress } from "./balance.service";
 import { handleTradeExecution } from "./position.service";
 import { updateCandleFromTrade } from "./candle.service";
-import { checkFirstOrderAchievement, AchievementUnlockResult } from "./achievement.service";
+import { 
+  checkFirstOrderAchievement, 
+  checkFirstMarketOrderAchievement,
+  checkFirstLimitOrderAchievement,
+  checkTradeCountAchievements,
+  AchievementUnlockResult 
+} from "./achievement.service";
 
 interface PlaceOrderParams {
   marketSymbol: string;
@@ -189,17 +195,42 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     });
   }
   
-  // Check for first order achievement
+  // Check for order achievements
   const newAchievements: AchievementUnlockResult[] = [];
   try {
-    console.log(`🔍 Checking first order achievement for ${userAddress}...`);
+    console.log(`🔍 Checking order achievements for ${userAddress}...`);
+    
+    // Check first order achievement (any order type)
     const firstOrderAchievement = await checkFirstOrderAchievement(userAddress);
     if (firstOrderAchievement) {
       console.log(`✅ First order achievement result:`, firstOrderAchievement.achievement.name);
       newAchievements.push(firstOrderAchievement);
     }
+    
+    // Check order type-specific achievements
+    if (type === "market") {
+      const marketOrderAchievement = await checkFirstMarketOrderAchievement(userAddress);
+      if (marketOrderAchievement) {
+        console.log(`✅ First market order achievement result:`, marketOrderAchievement.achievement.name);
+        newAchievements.push(marketOrderAchievement);
+      }
+    } else if (type === "limit") {
+      const limitOrderAchievement = await checkFirstLimitOrderAchievement(userAddress);
+      if (limitOrderAchievement) {
+        console.log(`✅ First limit order achievement result:`, limitOrderAchievement.achievement.name);
+        newAchievements.push(limitOrderAchievement);
+      }
+    }
+    
+    // Check trade count achievements if any trades were executed
+    if (trades.length > 0) {
+      const tradeCountAchievements = await checkTradeCountAchievements(userAddress);
+      if (tradeCountAchievements.length > 0) {
+        newAchievements.push(...tradeCountAchievements);
+      }
+    }
   } catch (error) {
-    console.error(`❌ Error checking first order achievement:`, error);
+    console.error(`❌ Error checking order achievements:`, error);
   }
   
   return {
@@ -347,6 +378,11 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
           filledQuantity: makerOrder.filledQuantity,
           status: makerOrder.status,
           timestamp: Date.now(),
+        });
+        
+        // Check trade count achievements for maker
+        checkTradeCountAchievements(makerOrder.userAddress).catch(err => {
+          console.error(`❌ Error checking trade count achievements for maker:`, err);
         });
       }
     }

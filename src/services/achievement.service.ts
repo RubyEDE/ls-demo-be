@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { Achievement, IAchievement } from "../models/achievement.model";
 import { UserAchievement, IUserAchievement } from "../models/user-achievement.model";
 import { User } from "../models/user.model";
+import { Trade } from "../models/trade.model";
 
 // Achievement definition interface for seeding
 interface AchievementDefinition {
@@ -100,6 +101,175 @@ const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     requirement: {
       type: "orders_placed",
       threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "first_market_order",
+    name: "Market Mover",
+    description: "Place your first market order",
+    category: "trading",
+    icon: "zap",
+    points: 20,
+    isProgression: false,
+    requirement: {
+      type: "market_orders_placed",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "first_limit_order",
+    name: "Patient Trader",
+    description: "Place your first limit order",
+    category: "trading",
+    icon: "clock",
+    points: 20,
+    isProgression: false,
+    requirement: {
+      type: "limit_orders_placed",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "first_liquidation",
+    name: "Rekt",
+    description: "Get liquidated for the first time",
+    category: "trading",
+    icon: "skull",
+    points: 10,
+    isProgression: false,
+    requirement: {
+      type: "liquidations",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "high_leverage_trade",
+    name: "Degen Mode",
+    description: "Open a position with 10x leverage",
+    category: "trading",
+    icon: "flame",
+    points: 25,
+    isProgression: false,
+    requirement: {
+      type: "high_leverage_trades",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  // Trade count progression achievements
+  {
+    id: "trades_10",
+    name: "Getting Started",
+    description: "Complete 10 trades",
+    category: "trading",
+    icon: "trending-up",
+    points: 25,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 1,
+    requirement: {
+      type: "trades_executed",
+      threshold: 10,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_25",
+    name: "Active Trader",
+    description: "Complete 25 trades",
+    category: "trading",
+    icon: "activity",
+    points: 50,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 2,
+    requirement: {
+      type: "trades_executed",
+      threshold: 25,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_50",
+    name: "Seasoned Trader",
+    description: "Complete 50 trades",
+    category: "trading",
+    icon: "bar-chart-2",
+    points: 100,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 3,
+    requirement: {
+      type: "trades_executed",
+      threshold: 50,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_100",
+    name: "Century Club",
+    description: "Complete 100 trades",
+    category: "trading",
+    icon: "award",
+    points: 200,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 4,
+    requirement: {
+      type: "trades_executed",
+      threshold: 100,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_500",
+    name: "Trading Pro",
+    description: "Complete 500 trades",
+    category: "trading",
+    icon: "target",
+    points: 500,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 5,
+    requirement: {
+      type: "trades_executed",
+      threshold: 500,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_1000",
+    name: "Market Veteran",
+    description: "Complete 1,000 trades",
+    category: "trading",
+    icon: "shield",
+    points: 1000,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 6,
+    requirement: {
+      type: "trades_executed",
+      threshold: 1000,
+    },
+    isActive: true,
+  },
+  {
+    id: "trades_10000",
+    name: "Trading Legend",
+    description: "Complete 10,000 trades",
+    category: "trading",
+    icon: "crown",
+    points: 5000,
+    isProgression: true,
+    progressionGroup: "trade_count",
+    progressionOrder: 7,
+    requirement: {
+      type: "trades_executed",
+      threshold: 10000,
     },
     isActive: true,
   },
@@ -537,6 +707,301 @@ export async function checkFirstOrderAchievement(
   } catch (error) {
     console.error(`❌ Error checking first order achievement:`, error);
     return null;
+  }
+}
+
+/**
+ * Check first market order achievement for a user
+ * Call this after a successful market order placement
+ * Returns the unlocked achievement if it's the user's first market order
+ */
+export async function checkFirstMarketOrderAchievement(
+  address: string
+): Promise<AchievementUnlockResult | null> {
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    // Get the user to get their userId
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    // Check if user already has this achievement
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "first_market_order",
+    });
+    
+    if (existing) {
+      console.log(`🏆 First market order achievement already unlocked for ${address}`);
+      return null;
+    }
+    
+    // Get the achievement
+    const achievement = await getAchievementById("first_market_order");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'first_market_order' not found in database. Did you restart the server?`);
+      return null;
+    }
+    
+    // Create user achievement
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "first_market_order",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking first market order achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check first limit order achievement for a user
+ * Call this after a successful limit order placement
+ * Returns the unlocked achievement if it's the user's first limit order
+ */
+export async function checkFirstLimitOrderAchievement(
+  address: string
+): Promise<AchievementUnlockResult | null> {
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    // Get the user to get their userId
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    // Check if user already has this achievement
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "first_limit_order",
+    });
+    
+    if (existing) {
+      console.log(`🏆 First limit order achievement already unlocked for ${address}`);
+      return null;
+    }
+    
+    // Get the achievement
+    const achievement = await getAchievementById("first_limit_order");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'first_limit_order' not found in database. Did you restart the server?`);
+      return null;
+    }
+    
+    // Create user achievement
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "first_limit_order",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking first limit order achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check first liquidation achievement for a user
+ * Call this after a user's position is liquidated
+ * Returns the unlocked achievement if it's the user's first liquidation
+ */
+export async function checkFirstLiquidationAchievement(
+  address: string
+): Promise<AchievementUnlockResult | null> {
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    // Get the user to get their userId
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    // Check if user already has this achievement
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "first_liquidation",
+    });
+    
+    if (existing) {
+      console.log(`🏆 First liquidation achievement already unlocked for ${address}`);
+      return null;
+    }
+    
+    // Get the achievement
+    const achievement = await getAchievementById("first_liquidation");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'first_liquidation' not found in database. Did you restart the server?`);
+      return null;
+    }
+    
+    // Create user achievement
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "first_liquidation",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking first liquidation achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check high leverage trade achievement for a user
+ * Call this when a position is opened or increased with 10x+ leverage
+ * Returns the unlocked achievement if it's the user's first high leverage trade
+ */
+export async function checkHighLeverageAchievement(
+  address: string,
+  leverage: number
+): Promise<AchievementUnlockResult | null> {
+  // Only award if leverage is 10x or higher
+  if (leverage < 10) {
+    return null;
+  }
+
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    // Get the user to get their userId
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    // Check if user already has this achievement
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "high_leverage_trade",
+    });
+    
+    if (existing) {
+      console.log(`🏆 High leverage achievement already unlocked for ${address}`);
+      return null;
+    }
+    
+    // Get the achievement
+    const achievement = await getAchievementById("high_leverage_trade");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'high_leverage_trade' not found in database. Did you restart the server?`);
+      return null;
+    }
+    
+    // Create user achievement
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "high_leverage_trade",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (${leverage.toFixed(1)}x leverage)`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking high leverage achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get user's total trade count
+ * Counts trades where the user is either maker or taker (non-synthetic)
+ */
+async function getUserTradeCount(address: string): Promise<number> {
+  const normalizedAddress = address.toLowerCase();
+  
+  const count = await Trade.countDocuments({
+    $or: [
+      { makerAddress: normalizedAddress, makerIsSynthetic: false },
+      { takerAddress: normalizedAddress, takerIsSynthetic: false },
+    ],
+  });
+  
+  return count;
+}
+
+/**
+ * Check trade count achievements for a user
+ * Call this after a trade is executed
+ * Returns newly unlocked achievements
+ */
+export async function checkTradeCountAchievements(
+  address: string
+): Promise<AchievementUnlockResult[]> {
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    // Get the user to get their userId
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return [];
+    }
+    
+    // Get the user's total trade count
+    const tradeCount = await getUserTradeCount(address);
+    
+    // Check progression achievements for trades_executed
+    const newAchievements = await checkProgressionAchievements(
+      user._id as Types.ObjectId,
+      address,
+      "trades_executed",
+      tradeCount
+    );
+    
+    if (newAchievements.length > 0) {
+      console.log(`🏆 Trade count achievements unlocked for ${address}: ${newAchievements.map(a => a.achievement.name).join(', ')}`);
+    }
+    
+    return newAchievements;
+  } catch (error) {
+    console.error(`❌ Error checking trade count achievements:`, error);
+    return [];
   }
 }
 

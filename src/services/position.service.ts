@@ -3,6 +3,7 @@ import { Position, IPosition, PositionSide } from "../models/position.model";
 import { getMarket, getCachedPrice } from "./market.service";
 import { sendPositionUpdate, PositionUpdate } from "./websocket.service";
 import { lockBalanceByAddress, unlockBalanceByAddress, creditBalanceByAddress } from "./balance.service";
+import { checkHighLeverageAchievement } from "./achievement.service";
 
 interface OpenPositionParams {
   marketSymbol: string;
@@ -186,6 +187,13 @@ export async function openPosition(params: OpenPositionParams): Promise<Position
   
   console.log(`📊 Opened ${side} position for ${userAddress}: ${size} ${marketSymbol} @ $${entryPrice}`);
   
+  // Check for high leverage achievement
+  try {
+    await checkHighLeverageAchievement(userAddress, leverage);
+  } catch (error) {
+    console.error(`❌ Error checking high leverage achievement:`, error);
+  }
+  
   return { success: true, position };
 }
 
@@ -231,6 +239,13 @@ export async function increasePosition(
   broadcastPositionUpdate(position, getCachedPrice(position.marketSymbol) || executionPrice);
   
   console.log(`📊 Increased position ${position.positionId}: +${additionalSize} @ $${executionPrice}`);
+  
+  // Check for high leverage achievement
+  try {
+    await checkHighLeverageAchievement(position.userAddress, position.leverage);
+  } catch (error) {
+    console.error(`❌ Error checking high leverage achievement:`, error);
+  }
   
   return { success: true, position };
 }

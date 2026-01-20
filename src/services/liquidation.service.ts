@@ -3,6 +3,7 @@ import { getCachedPrice } from "./market.service";
 import { sendPositionUpdate, PositionUpdate } from "./websocket.service";
 import { debitBalanceByAddress, creditBalanceByAddress } from "./balance.service";
 import { calculateUnrealizedPnl, wouldBeLiquidated } from "./position.service";
+import { checkFirstLiquidationAchievement } from "./achievement.service";
 
 // Liquidation check interval
 let liquidationInterval: NodeJS.Timeout | null = null;
@@ -107,6 +108,16 @@ async function executePositionLiquidation(
       `@ $${currentPrice.toFixed(2)} | User: ${position.userAddress.slice(0, 10)}... | ` +
       `Entry: $${position.entryPrice.toFixed(2)} | Loss: $${Math.abs(unrealizedPnl).toFixed(2)}`
     );
+    
+    // Check for first liquidation achievement
+    try {
+      const liquidationAchievement = await checkFirstLiquidationAchievement(position.userAddress);
+      if (liquidationAchievement) {
+        console.log(`🏆 Liquidation achievement unlocked for ${position.userAddress.slice(0, 10)}...`);
+      }
+    } catch (error) {
+      console.error(`❌ Error checking liquidation achievement:`, error);
+    }
     
     return true;
   } catch (error) {
