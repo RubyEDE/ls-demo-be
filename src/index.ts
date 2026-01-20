@@ -16,6 +16,7 @@ import { initializeCandles, getMarketStatus } from "./services/candle.service";
 import { initializeOrderBooks } from "./services/orderbook.service";
 import { initializeAchievements } from "./services/achievement.service";
 import { startLiquidationEngine } from "./services/liquidation.service";
+import { startFundingEngine, getFundingStats } from "./services/funding.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,6 +30,7 @@ app.use(express.json());
 
 // Health check
 app.get("/health", (_req, res) => {
+  const fundingStats = getFundingStats();
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
@@ -36,6 +38,11 @@ app.get("/health", (_req, res) => {
     websocket: {
       activeChannels: getActiveChannels(),
       pollingSymbols: getPollingSymbols(),
+    },
+    funding: {
+      isRunning: fundingStats.isRunning,
+      totalProcessed: fundingStats.totalFundingProcessed,
+      lastFundingAt: fundingStats.lastFundingAt?.toISOString() || null,
     },
   });
 });
@@ -81,6 +88,9 @@ async function start() {
   
   // Start liquidation engine (checks every second)
   startLiquidationEngine(1000);
+  
+  // Start funding rate engine (checks every minute for due funding)
+  startFundingEngine(60000);
   
   httpServer.listen(config.port, () => {
     console.log(`🚀 EVM Auth Server running on http://localhost:${config.port}`);
@@ -155,6 +165,12 @@ Available endpoints:
     GET  /clob/market-status         - Get market open/closed status
     GET  /clob/candles/:symbol       - Get candle data (?interval=1m&limit=100)
     GET  /clob/candles/:symbol/status - Check if enough candle data exists
+  
+  Funding Rate:
+    GET  /clob/funding/:symbol       - Get funding rate info for market
+    GET  /clob/funding/:symbol/history - Get funding payment history
+    GET  /clob/funding/:symbol/estimate - Estimate funding for position (?side=long&size=1)
+    GET  /clob/funding-stats         - Get global funding statistics
   
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates

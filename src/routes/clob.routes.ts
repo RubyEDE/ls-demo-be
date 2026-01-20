@@ -773,4 +773,164 @@ router.get("/candles/:symbol/status", async (req: Request, res: Response) => {
   }
 });
 
+// ============ Funding Rate Routes ============
+
+import {
+  getFundingRateInfo,
+  getFundingHistory,
+  getEstimatedFundingPayment,
+  getAnnualizedFundingRate,
+  getFundingStats,
+} from "../services/funding.service";
+
+/**
+ * GET /clob/funding/:symbol
+ * Get funding rate information for a market
+ */
+router.get("/funding/:symbol", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    
+    const fundingInfo = await getFundingRateInfo(symbol);
+    
+    if (!fundingInfo) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    // Calculate annualized rate
+    const annualizedRate = getAnnualizedFundingRate(
+      fundingInfo.currentFundingRate,
+      fundingInfo.fundingInterval
+    );
+    
+    res.json({
+      marketSymbol: fundingInfo.marketSymbol,
+      fundingRate: fundingInfo.currentFundingRate,
+      fundingRatePercent: (fundingInfo.currentFundingRate * 100).toFixed(4) + "%",
+      predictedFundingRate: fundingInfo.predictedFundingRate,
+      predictedFundingRatePercent: (fundingInfo.predictedFundingRate * 100).toFixed(4) + "%",
+      annualizedRate,
+      annualizedRatePercent: (annualizedRate * 100).toFixed(2) + "%",
+      markPrice: fundingInfo.markPrice,
+      indexPrice: fundingInfo.indexPrice,
+      premium: fundingInfo.premium,
+      premiumPercent: (fundingInfo.premium * 100).toFixed(4) + "%",
+      nextFundingTime: fundingInfo.nextFundingTime?.toISOString(),
+      fundingIntervalHours: fundingInfo.fundingInterval,
+      lastFunding: fundingInfo.lastFunding ? {
+        fundingRate: fundingInfo.lastFunding.fundingRate,
+        timestamp: fundingInfo.lastFunding.timestamp.toISOString(),
+        positionsProcessed: fundingInfo.lastFunding.positionsProcessed,
+      } : null,
+    });
+  } catch (error) {
+    console.error("Error fetching funding info:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch funding info" });
+  }
+});
+
+/**
+ * GET /clob/funding/:symbol/history
+ * Get funding payment history for a market
+ */
+router.get("/funding/:symbol/history", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const history = getFundingHistory(symbol, limit);
+    
+    res.json({
+      marketSymbol: market.symbol,
+      fundingHistory: history.map((h) => ({
+        fundingRate: h.fundingRate,
+        fundingRatePercent: (h.fundingRate * 100).toFixed(4) + "%",
+        timestamp: h.timestamp.toISOString(),
+        longPayment: h.longPayment,
+        shortPayment: h.shortPayment,
+        totalLongSize: h.totalLongSize,
+        totalShortSize: h.totalShortSize,
+        positionsProcessed: h.positionsProcessed,
+      })),
+      count: history.length,
+    });
+  } catch (error) {
+    console.error("Error fetching funding history:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch funding history" });
+  }
+});
+
+/**
+ * GET /clob/funding/:symbol/estimate
+ * Estimate funding payment for a hypothetical position
+ */
+router.get("/funding/:symbol/estimate", async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const side = req.query.side as "long" | "short";
+    const size = parseFloat(req.query.size as string);
+    
+    if (!side || !["long", "short"].includes(side)) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "Side must be 'long' or 'short'",
+      });
+    }
+    
+    if (!size || size <= 0) {
+      return res.status(400).json({
+        error: "INVALID_REQUEST",
+        message: "Size must be a positive number",
+      });
+    }
+    
+    const market = await getMarket(symbol);
+    if (!market) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
+    }
+    
+    const estimate = getEstimatedFundingPayment(symbol, side, size);
+    
+    res.json({
+      marketSymbol: market.symbol,
+      side,
+      size,
+      fundingRate: estimate.fundingRate,
+      fundingRatePercent: (estimate.fundingRate * 100).toFixed(4) + "%",
+      estimatedPayment: estimate.estimatedPayment,
+      paymentDirection: estimate.paymentDirection,
+      nextFundingTime: market.nextFundingTime?.toISOString(),
+      fundingIntervalHours: market.fundingInterval,
+    });
+  } catch (error) {
+    console.error("Error estimating funding:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to estimate funding" });
+  }
+});
+
+/**
+ * GET /clob/funding/stats
+ * Get global funding statistics
+ */
+router.get("/funding-stats", async (_req: Request, res: Response) => {
+  try {
+    const stats = getFundingStats();
+    
+    res.json({
+      totalFundingProcessed: stats.totalFundingProcessed,
+      totalPaymentsDistributed: stats.totalPaymentsDistributed,
+      lastFundingAt: stats.lastFundingAt?.toISOString() || null,
+      isEngineRunning: stats.isRunning,
+    });
+  } catch (error) {
+    console.error("Error fetching funding stats:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch funding stats" });
+  }
+});
+
 export default router;

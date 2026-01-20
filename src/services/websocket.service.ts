@@ -21,6 +21,10 @@ export interface ServerToClientEvents {
   // Candle events
   "candle:update": (data: CandleUpdate) => void;
   
+  // Funding events
+  "funding:update": (data: FundingUpdate) => void;
+  "funding:payment": (data: FundingPaymentEvent) => void;
+  
   // User-specific events
   "order:created": (data: OrderEvent) => void;
   "order:filled": (data: OrderEvent) => void;
@@ -47,6 +51,8 @@ export interface ClientToServerEvents {
   "unsubscribe:trades": (symbol: string) => void;
   "subscribe:candles": (data: { symbol: string; interval?: string } | string) => void;
   "unsubscribe:candles": (data: { symbol: string; interval?: string } | string) => void;
+  "subscribe:funding": (symbol: string) => void;
+  "unsubscribe:funding": (symbol: string) => void;
 }
 
 export interface InterServerEvents {
@@ -146,6 +152,26 @@ export interface PositionUpdate {
   realizedPnl: number;
   liquidationPrice: number;
   status: "open" | "closed" | "liquidated";
+  timestamp: number;
+}
+
+export interface FundingUpdate {
+  symbol: string;
+  fundingRate: number;
+  predictedFundingRate: number;
+  markPrice: number;
+  indexPrice: number;
+  premium: number;
+  nextFundingTime: number;
+  timestamp: number;
+}
+
+export interface FundingPaymentEvent {
+  symbol: string;
+  fundingRate: number;
+  totalLongPayment: number;
+  totalShortPayment: number;
+  positionsProcessed: number;
   timestamp: number;
 }
 
@@ -291,6 +317,22 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
       socket.emit("unsubscribed", { channel: "candles", symbol, interval });
     });
 
+    // Handle funding subscriptions
+    socket.on("subscribe:funding", (symbol) => {
+      const channel = `funding:${symbol.toUpperCase()}`;
+      socket.join(channel);
+      addSubscription(channel, socket.id);
+      socket.emit("subscribed", { channel: "funding", symbol: symbol.toUpperCase() });
+      console.log(`💰 ${socket.id} subscribed to ${channel}`);
+    });
+
+    socket.on("unsubscribe:funding", (symbol) => {
+      const channel = `funding:${symbol.toUpperCase()}`;
+      socket.leave(channel);
+      removeSubscription(channel, socket.id);
+      socket.emit("unsubscribed", { channel: "funding", symbol: symbol.toUpperCase() });
+    });
+
     // Handle disconnection
     socket.on("disconnect", (reason) => {
       console.log(`📡 WebSocket disconnected: ${socket.id} (${reason})`);
@@ -423,6 +465,22 @@ export function sendPositionUpdate(userAddress: string, data: PositionUpdate): v
 export function sendPositionOpened(userAddress: string, data: PositionUpdate): void {
   if (!io) return;
   io.to(`user:${userAddress.toLowerCase()}`).emit("position:opened", data);
+}
+
+/**
+ * Broadcast funding rate update
+ */
+export function broadcastFundingUpdate(symbol: string, data: FundingUpdate): void {
+  if (!io) return;
+  io.to(`funding:${symbol.toUpperCase()}`).emit("funding:update", data);
+}
+
+/**
+ * Broadcast funding payment event (when funding is processed)
+ */
+export function broadcastFundingPayment(symbol: string, data: FundingPaymentEvent): void {
+  if (!io) return;
+  io.to(`funding:${symbol.toUpperCase()}`).emit("funding:payment", data);
 }
 
 /**

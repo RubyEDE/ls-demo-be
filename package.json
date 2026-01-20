@@ -21,6 +21,9 @@
     "test:achievements": "tsx src/test/achievements/faucet-achievements.test.ts",
     "test:achievements:faucet": "tsx src/test/achievements/faucet-achievements.test.ts",
     "test:achievements:referral": "tsx src/test/achievements/referral-achievements.test.ts",
+    "test:funding": "tsx src/test/funding.test.ts",
+    "test:liquidation": "tsx src/test/liquidation.test.ts",
+    "test:referrals": "tsx src/test/referrals.test.ts",
     "test": "tsx src/test/auth.test.ts && tsx src/test/faucet.test.ts && tsx src/test/finnhub.test.ts"
   },
   "keywords": [
