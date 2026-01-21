@@ -108,14 +108,14 @@ async function start() {
   // Initialize and start the light market maker (after a delay to ensure prices are loaded)
   initLightMarketMaker({
     numAccounts: 500,          // 500 synthetic accounts
-    spreadBps: 20,             // 0.2% spread
+    spreadBps: 10,             // 0.1% spread (tight)
     numLevels: 50,             // 50 price levels per side
-    levelSpacingBps: 5,        // 0.05% between levels
+    levelSpacingBps: 3,        // 0.03% between levels
     baseOrderSize: 0.5,        // 0.5 units base size
     sizeMultiplier: 1.05,      // 5% more at each deeper level
     sizeVariance: 0.3,         // 30% random variance
     ordersPerLevel: 3,         // 3 orders per price level
-    refreshIntervalMs: 30000,  // Refresh every 30 seconds
+    refreshIntervalMs: 1000,   // Refresh every 1 second
     enableTradeGeneration: true,
     tradeIntervalMs: 2000,     // Generate trades every 2 seconds
     minTradesPerInterval: 1,

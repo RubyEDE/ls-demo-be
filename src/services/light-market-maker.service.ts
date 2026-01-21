@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
-import { Order, IOrder } from "../models/order.model";
+import { Order, IOrder, OrderType, OrderSide } from "../models/order.model";
 import { Trade } from "../models/trade.model";
 import { getActiveMarkets, getCachedPrice, roundToTickSize, roundToLotSize } from "./market.service";
-import { addToOrderBook, removeFromOrderBook, getBestBid, getBestAsk } from "./orderbook.service";
+import { addToOrderBook, removeFromOrderBook, getBestBid, getBestAsk, clearOrderBook, broadcastOrderBook } from "./orderbook.service";
 import { broadcastTradeExecuted } from "./websocket.service";
 import { updateCandleFromTrade } from "./candle.service";
 
@@ -253,31 +253,75 @@ async function refreshAllMarkets(): Promise<void> {
 
 /**
  * Refresh liquidity for a single market
+ * Centers orderbook around current trade price (from trend), not oracle
  */
 async function refreshMarketLiquidity(marketSymbol: string): Promise<void> {
   const symbol = marketSymbol.toUpperCase();
   
-  // Get current oracle price
+  // Get oracle price as fallback
   const oraclePrice = getCachedPrice(symbol);
   if (!oraclePrice || oraclePrice <= 0) {
-    console.log(`⏳ No price for ${symbol}, skipping...`);
-    return;
+    return; // Skip silently if no price
   }
 
-  // Cancel existing synthetic orders for this market
-  await cancelMarketSyntheticOrders(symbol);
+  // Use current trend price if available, otherwise oracle
+  const trend = marketTrends.get(symbol);
+  const centerPrice = trend?.currentPrice || oraclePrice;
 
-  // Generate new orders with multiple accounts
-  const orders = generateOrdersWithAccounts(symbol, oraclePrice);
+  // 1. Bulk delete all synthetic orders from DB
+  await Order.deleteMany({
+    marketSymbol: symbol,
+    isSynthetic: true,
+  });
+
+  // 2. Clear in-memory orderbook completely
+  clearOrderBook(symbol);
+
+  // 3. Load any real user orders back into orderbook
+  const userOrders = await Order.find({
+    marketSymbol: symbol,
+    isSynthetic: false,
+    status: { $in: ["open", "partial"] },
+  });
+  for (const order of userOrders) {
+    addToOrderBook(order);
+  }
+
+  // 4. Generate and place new synthetic orders
+  const syntheticOrders = generateOrdersWithAccounts(symbol, centerPrice);
   
-  // Place new orders
-  for (const orderData of orders) {
-    await placeSyntheticOrder(orderData);
+  // Bulk insert synthetic orders
+  const orderDocs = syntheticOrders.map(o => ({
+    orderId: `SYN-${uuidv4()}`,
+    marketSymbol: o.marketSymbol,
+    userId: null,
+    userAddress: o.userAddress,
+    side: o.side as OrderSide,
+    type: "limit" as OrderType,
+    price: o.price,
+    quantity: o.quantity,
+    filledQuantity: 0,
+    remainingQuantity: o.quantity,
+    averagePrice: 0,
+    isSynthetic: true,
+    postOnly: false,
+    reduceOnly: false,
+    status: "open" as const,
+  }));
+
+  // Bulk insert to DB
+  const insertedOrders = await Order.insertMany(orderDocs);
+
+  // Add to in-memory orderbook
+  for (const order of insertedOrders) {
+    addToOrderBook(order as unknown as IOrder);
   }
 
-  const bidCount = orders.filter(o => o.side === "buy").length;
-  const askCount = orders.filter(o => o.side === "sell").length;
-  console.log(`📊 ${symbol}: ${orders.length} orders (${bidCount} bids, ${askCount} asks) @ $${oraclePrice.toFixed(2)}`);
+  // Update tracking
+  syntheticOrderIds.set(symbol, new Set(insertedOrders.map(o => o.orderId)));
+
+  // Broadcast updated orderbook to WebSocket subscribers
+  broadcastOrderBook(symbol);
 }
 
 /**
@@ -403,29 +447,16 @@ async function placeSyntheticOrder(params: {
 }
 
 /**
- * Cancel all synthetic orders for a market
+ * Cancel all synthetic orders for a market (bulk operation)
  */
 async function cancelMarketSyntheticOrders(marketSymbol: string): Promise<void> {
   const symbol = marketSymbol.toUpperCase();
   
-  // Get all open synthetic orders from DB
-  const orders = await Order.find({
+  // Bulk delete all synthetic orders from DB (much faster than one-by-one)
+  await Order.deleteMany({
     marketSymbol: symbol,
     isSynthetic: true,
-    status: { $in: ["open", "partial"] },
   });
-
-  for (const order of orders) {
-    // Remove from order book
-    if (order.remainingQuantity > 0) {
-      removeFromOrderBook(symbol, order.side, order.price, order.remainingQuantity);
-    }
-
-    // Update order status
-    order.status = "cancelled";
-    order.cancelledAt = new Date();
-    await order.save();
-  }
 
   // Clear tracking
   syntheticOrderIds.delete(symbol);
@@ -460,37 +491,90 @@ async function cancelAllSyntheticOrders(): Promise<void> {
 }
 
 // ============================================================================
-// Trade Generation
+// Trade Generation - Trend-Based System
 // ============================================================================
 
-// Track last trade price per market for realistic price continuity
-const lastTradePrice = new Map<string, number>();
+// Trend state per market
+interface TrendState {
+  direction: "up" | "down";      // Current trend direction
+  startPrice: number;            // Price at trend start
+  targetPrice: number;           // Target price for this trend
+  startTime: number;             // When trend started (ms)
+  durationMs: number;            // How long this trend should last
+  currentPrice: number;          // Current trade price
+}
 
-// Max price drift per trade (0.1% = 10 bps)
-const MAX_TRADE_DRIFT_BPS = 10;
+// Track trend state per market
+const marketTrends = new Map<string, TrendState>();
+
+// Trend configuration
+const TREND_MIN_DURATION_MS = 5 * 60 * 1000;  // 5 minutes
+const TREND_MAX_DURATION_MS = 8 * 60 * 1000;  // 8 minutes
+const TREND_MIN_MOVE_PERCENT = 1.0;           // 1% minimum move
+const TREND_MAX_MOVE_PERCENT = 2.0;           // 2% maximum move
 
 /**
- * Get last trade price for a market, or initialize from oracle
+ * Get or create trend state for a market
  */
-function getLastTradePrice(symbol: string): number | null {
-  const cached = lastTradePrice.get(symbol);
-  if (cached) return cached;
+function getOrCreateTrend(symbol: string): TrendState | null {
+  const existing = marketTrends.get(symbol);
+  const now = Date.now();
   
-  // Initialize from oracle price if no trades yet
-  const oraclePrice = getCachedPrice(symbol);
-  if (oraclePrice) {
-    lastTradePrice.set(symbol, oraclePrice);
-    return oraclePrice;
+  // Check if we need a new trend
+  if (existing && (now - existing.startTime) < existing.durationMs) {
+    return existing; // Current trend still active
   }
   
-  return null;
+  // Get base price (oracle price or last trade price)
+  const oraclePrice = getCachedPrice(symbol);
+  const basePrice = existing?.currentPrice || oraclePrice;
+  
+  if (!basePrice) {
+    return null;
+  }
+  
+  // Create new trend
+  const direction: "up" | "down" = Math.random() > 0.5 ? "up" : "down";
+  const movePercent = TREND_MIN_MOVE_PERCENT + Math.random() * (TREND_MAX_MOVE_PERCENT - TREND_MIN_MOVE_PERCENT);
+  const durationMs = TREND_MIN_DURATION_MS + Math.random() * (TREND_MAX_DURATION_MS - TREND_MIN_DURATION_MS);
+  
+  const moveFactor = direction === "up" ? (1 + movePercent / 100) : (1 - movePercent / 100);
+  const targetPrice = basePrice * moveFactor;
+  
+  const newTrend: TrendState = {
+    direction,
+    startPrice: basePrice,
+    targetPrice,
+    startTime: now,
+    durationMs,
+    currentPrice: basePrice,
+  };
+  
+  marketTrends.set(symbol, newTrend);
+  console.log(`📈 ${symbol}: New ${direction} trend - ${movePercent.toFixed(1)}% over ${(durationMs / 60000).toFixed(1)}min ($${basePrice.toFixed(2)} → $${targetPrice.toFixed(2)})`);
+  
+  // Refresh orderbook to center around new trend start price (async, don't await)
+  refreshMarketLiquidity(symbol).catch(err => {
+    console.error(`Failed to refresh orderbook for ${symbol}:`, err);
+  });
+  
+  return newTrend;
 }
 
 /**
- * Update last trade price
+ * Calculate the target price progress based on time elapsed in trend
  */
-function setLastTradePrice(symbol: string, price: number): void {
-  lastTradePrice.set(symbol, price);
+function getTrendTargetPrice(trend: TrendState): number {
+  const now = Date.now();
+  const elapsed = now - trend.startTime;
+  const progress = Math.min(1, elapsed / trend.durationMs);
+  
+  // Smooth easing - accelerate in middle, slow at ends
+  const easedProgress = progress < 0.5
+    ? 2 * progress * progress
+    : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+  
+  return trend.startPrice + (trend.targetPrice - trend.startPrice) * easedProgress;
 }
 
 /**
@@ -513,15 +597,15 @@ async function generateTradesForAllMarkets(): Promise<void> {
 
 /**
  * Generate synthetic trades for a market
- * Trades are based on last trade price with max 0.1% drift
+ * Follows trend direction with 1-2% moves over 5-8 minute periods
  */
 async function generateSyntheticTrades(marketSymbol: string): Promise<void> {
   const symbol = marketSymbol.toUpperCase();
   
-  // Get last trade price (or oracle price as fallback)
-  const lastPrice = getLastTradePrice(symbol);
-  if (!lastPrice) {
-    return; // Need a reference price
+  // Get or create trend for this market
+  const trend = getOrCreateTrend(symbol);
+  if (!trend) {
+    return;
   }
 
   // Get best bid and ask for bounds
@@ -529,7 +613,7 @@ async function generateSyntheticTrades(marketSymbol: string): Promise<void> {
   const bestAsk = getBestAsk(symbol);
   
   if (!bestBid || !bestAsk) {
-    return; // Need orderbook for bounds
+    return;
   }
 
   // Random number of trades
@@ -538,26 +622,31 @@ async function generateSyntheticTrades(marketSymbol: string): Promise<void> {
     + config.minTradesPerInterval
   );
 
-  let currentPrice = lastPrice;
+  // Get target price based on trend progress
+  const trendTarget = getTrendTargetPrice(trend);
+  let currentPrice = trend.currentPrice;
 
   for (let i = 0; i < numTrades; i++) {
-    // Random side based on slight bias from current position relative to mid
-    const midPrice = (bestBid + bestAsk) / 2;
-    const buyBias = currentPrice < midPrice ? 0.55 : 0.45; // Slight mean reversion
-    const side: "buy" | "sell" = Math.random() < buyBias ? "buy" : "sell";
+    // Determine side based on trend direction (80% with trend, 20% against)
+    const withTrend = Math.random() < 0.8;
+    const side: "buy" | "sell" = withTrend
+      ? (trend.direction === "up" ? "buy" : "sell")
+      : (trend.direction === "up" ? "sell" : "buy");
     
-    // Calculate price drift from last trade (max 0.1% = 10 bps)
-    // Random drift between -0.1% and +0.1%, biased by side
-    const maxDrift = currentPrice * (MAX_TRADE_DRIFT_BPS / 10000);
-    const driftDirection = side === "buy" ? 1 : -1;
-    const randomFactor = Math.random() * 0.7 + 0.3; // 30-100% of max drift
-    const drift = driftDirection * maxDrift * randomFactor;
+    // Move toward trend target with small steps
+    const distanceToTarget = trendTarget - currentPrice;
+    const stepSize = Math.abs(distanceToTarget) * (0.02 + Math.random() * 0.08); // 2-10% of remaining distance
+    const step = distanceToTarget > 0 ? stepSize : -stepSize;
+    
+    // Add small noise
+    const noise = currentPrice * (Math.random() - 0.5) * 0.001; // ±0.05% noise
     
     // Calculate new trade price
-    let tradePrice = roundToTickSize(currentPrice + drift, 0.01);
+    let tradePrice = roundToTickSize(currentPrice + step + noise, 0.01);
     
-    // Clamp to orderbook bounds (can't trade outside best bid/ask)
-    tradePrice = Math.max(bestBid, Math.min(bestAsk, tradePrice));
+    // Clamp to orderbook bounds and fix floating point precision
+    tradePrice = Math.max(bestBid * 0.99, Math.min(bestAsk * 1.01, tradePrice));
+    tradePrice = Math.round(tradePrice * 100) / 100;
     
     // Random quantity within range
     const quantity = roundToLotSize(
@@ -613,8 +702,8 @@ async function generateSyntheticTrades(marketSymbol: string): Promise<void> {
     currentPrice = tradePrice;
   }
 
-  // Save last trade price for next interval
-  setLastTradePrice(symbol, currentPrice);
+  // Update trend's current price for next interval
+  trend.currentPrice = currentPrice;
 }
 
 // ============================================================================
@@ -640,6 +729,14 @@ export async function getLiquidityStats(): Promise<{
     spreadBps: number | null;
     oraclePrice: number | null;
     uniqueAccounts: number;
+    trend: {
+      direction: "up" | "down";
+      startPrice: number;
+      targetPrice: number;
+      currentPrice: number;
+      progressPercent: number;
+      remainingSeconds: number;
+    } | null;
   }>;
 }> {
   const markets = await getActiveMarkets();
@@ -677,6 +774,18 @@ export async function getLiquidityStats(): Promise<{
       // Count unique accounts
       const uniqueAccounts = new Set(orders.map(o => o.userAddress)).size;
 
+      // Get trend info
+      const trend = marketTrends.get(market.symbol);
+      const now = Date.now();
+      const trendInfo = trend ? {
+        direction: trend.direction,
+        startPrice: Math.round(trend.startPrice * 100) / 100,
+        targetPrice: Math.round(trend.targetPrice * 100) / 100,
+        currentPrice: Math.round(trend.currentPrice * 100) / 100,
+        progressPercent: Math.round(Math.min(100, ((now - trend.startTime) / trend.durationMs) * 100)),
+        remainingSeconds: Math.max(0, Math.round((trend.durationMs - (now - trend.startTime)) / 1000)),
+      } : null;
+
       return {
         symbol: market.symbol,
         bidOrders: bidOrders.length,
@@ -689,6 +798,7 @@ export async function getLiquidityStats(): Promise<{
         spreadBps,
         oraclePrice,
         uniqueAccounts,
+        trend: trendInfo,
       };
     })
   );

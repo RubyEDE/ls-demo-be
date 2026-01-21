@@ -13,6 +13,7 @@ const PREMIUM_INDEX_DAMPENER = 0.1; // Dampening factor for premium calculation
 
 // Funding engine state
 let fundingInterval: NodeJS.Timeout | null = null;
+let fundingBroadcastInterval: NodeJS.Timeout | null = null;
 let isProcessingFunding = false;
 
 // Funding history tracking
@@ -400,14 +401,15 @@ async function processAllFunding(): Promise<void> {
 /**
  * Start the funding rate engine
  * @param checkIntervalMs How often to check for due funding (default: 60 seconds)
+ * @param broadcastIntervalMs How often to broadcast funding rate updates (default: 10 seconds)
  */
-export function startFundingEngine(checkIntervalMs: number = 60000): void {
+export function startFundingEngine(checkIntervalMs: number = 60000, broadcastIntervalMs: number = 10000): void {
   if (fundingInterval) {
     console.log("⚠️ Funding engine already running");
     return;
   }
   
-  console.log(`💰 Starting funding rate engine (checking every ${checkIntervalMs / 1000}s)`);
+  console.log(`💰 Starting funding rate engine (checking every ${checkIntervalMs / 1000}s, broadcasting every ${broadcastIntervalMs / 1000}s)`);
   
   // Initialize next funding times for markets that don't have one set
   initializeMarketFundingTimes();
@@ -415,10 +417,21 @@ export function startFundingEngine(checkIntervalMs: number = 60000): void {
   // Run initial check
   processAllFunding();
   
-  // Set up periodic checking
+  // Broadcast funding rates immediately on startup
+  setTimeout(() => {
+    broadcastAllFundingRates();
+  }, 2000);
+  
+  // Set up periodic checking for due funding
   fundingInterval = setInterval(async () => {
     await processAllFunding();
   }, checkIntervalMs);
+  
+  // Set up periodic broadcasting of funding rate predictions
+  // This ensures frontend gets real-time updates even between funding events
+  fundingBroadcastInterval = setInterval(async () => {
+    await broadcastAllFundingRates();
+  }, broadcastIntervalMs);
 }
 
 /**
@@ -428,8 +441,12 @@ export function stopFundingEngine(): void {
   if (fundingInterval) {
     clearInterval(fundingInterval);
     fundingInterval = null;
-    console.log("💰 Funding rate engine stopped");
   }
+  if (fundingBroadcastInterval) {
+    clearInterval(fundingBroadcastInterval);
+    fundingBroadcastInterval = null;
+  }
+  console.log("💰 Funding rate engine stopped");
 }
 
 /**
@@ -623,9 +640,13 @@ function broadcastFundingRateUpdate(marketSymbol: string, market: IMarket): void
  * Called separately to provide real-time funding rate predictions
  */
 export async function broadcastAllFundingRates(): Promise<void> {
-  const markets = await Market.find({ status: "active" });
-  
-  for (const market of markets) {
-    broadcastFundingRateUpdate(market.symbol, market);
+  try {
+    const markets = await Market.find({ status: "active" });
+    
+    for (const market of markets) {
+      broadcastFundingRateUpdate(market.symbol, market);
+    }
+  } catch (error) {
+    console.error("Error broadcasting funding rates:", error);
   }
 }

@@ -109,6 +109,16 @@ export function calculateUnrealizedPnl(position: IPosition, currentPrice: number
 
 /**
  * Calculate liquidation price for a position
+ * 
+ * The liquidation price is where: equity = maintenance margin (at mark price)
+ * 
+ * For LONG positions:
+ *   margin + (L - entryPrice) * size = L * size * MMR
+ *   Solving for L: L = (entryPrice * size - margin) / (size * (1 - MMR))
+ * 
+ * For SHORT positions:
+ *   margin - (L - entryPrice) * size = L * size * MMR
+ *   Solving for L: L = (entryPrice * size + margin) / (size * (1 + MMR))
  */
 export function calculateLiquidationPrice(
   side: PositionSide,
@@ -119,24 +129,22 @@ export function calculateLiquidationPrice(
 ): number {
   if (size === 0) return 0;
   
-  // Position value at entry
-  const positionValue = entryPrice * size;
-  
-  // Maintenance margin required
-  const maintenanceMargin = positionValue * maintenanceMarginRate;
-  
-  // Available margin for loss before liquidation
-  const availableForLoss = margin - maintenanceMargin;
-  
-  // Price movement that would trigger liquidation
-  const priceMovement = availableForLoss / size;
+  // Ensure MMR is valid (should be between 0 and 1)
+  const mmr = Math.max(0.001, Math.min(0.99, maintenanceMarginRate));
   
   if (side === "long") {
-    // Long gets liquidated when price drops
-    return Math.max(0, entryPrice - priceMovement);
+    // Long: liquidated when price drops
+    // L = (entryPrice * size - margin) / (size * (1 - MMR))
+    const numerator = entryPrice * size - margin;
+    const denominator = size * (1 - mmr);
+    const liquidationPrice = numerator / denominator;
+    return Math.max(0, liquidationPrice);
   } else {
-    // Short gets liquidated when price rises
-    return entryPrice + priceMovement;
+    // Short: liquidated when price rises
+    // L = (entryPrice * size + margin) / (size * (1 + MMR))
+    const numerator = entryPrice * size + margin;
+    const denominator = size * (1 + mmr);
+    return numerator / denominator;
   }
 }
 
