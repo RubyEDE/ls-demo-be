@@ -8,6 +8,11 @@ export interface IUser extends Document {
   lastLoginAt: Date;
   createdAt: Date;
   updatedAt: Date;
+  // Leveling system
+  level: number;
+  experience: number; // Current XP within current level
+  totalExperience: number; // Lifetime total XP earned
+  lastTradeXPAt?: Date; // Last time user earned trade XP (daily limit)
 }
 
 /**
@@ -48,6 +53,26 @@ const userSchema = new Schema<IUser>(
     lastLoginAt: {
       type: Date,
       default: Date.now,
+    },
+    // Leveling system
+    level: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    experience: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalExperience: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    lastTradeXPAt: {
+      type: Date,
+      default: null,
     },
   },
   {

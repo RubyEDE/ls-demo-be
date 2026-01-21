@@ -4,6 +4,7 @@ import { creditBalance, getOrCreateBalance } from "./balance.service";
 import { IBalance } from "../models/balance.model";
 import { checkFaucetAchievements, AchievementUnlockResult } from "./achievement.service";
 import { completeReferral, applyReferralCode } from "./referral.service";
+import { awardFaucetXP } from "./leveling.service";
 
 // Faucet configuration
 const FAUCET_AMOUNT = 100; // Amount given per request
@@ -126,6 +127,11 @@ export async function requestFromFaucet(
     amount: FAUCET_AMOUNT,
     ipAddress,
     userAgent,
+  });
+  
+  // Award XP for faucet claim
+  awardFaucetXP(address).catch(err => {
+    console.error(`❌ Error awarding faucet XP:`, err);
   });
   
   // Calculate next available request time

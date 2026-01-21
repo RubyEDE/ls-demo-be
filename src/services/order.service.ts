@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { Order, IOrder, OrderSide, OrderType } from "../models/order.model";
 import { Trade, ITrade } from "../models/trade.model";
-import { getMarket, roundToTickSize, roundToLotSize, getCachedPrice } from "./market.service";
+import { getMarket, roundToTickSize, roundToLotSize, getCachedPrice, updateOraclePrice } from "./market.service";
+import { IMarket } from "../models/market.model";
 import { 
   addToOrderBook, 
   removeFromOrderBook, 
@@ -23,6 +24,45 @@ import {
   checkTradeCountAchievements,
   AchievementUnlockResult 
 } from "./achievement.service";
+import { awardTradeXP } from "./leveling.service";
+
+// Default prices for markets when oracle is unavailable (fallback)
+const DEFAULT_PRICES: Record<string, number> = {
+  "AK47-REDLINE-PERP": 45.00,
+  "GLOVE-CASE-PERP": 25.00,
+  "WEAPON-CASE-3-PERP": 15.00,
+};
+
+/**
+ * Get price for a market with fallbacks:
+ * 1. Check in-memory price cache
+ * 2. Check market's oraclePrice from database
+ * 3. Fall back to default price
+ */
+function getMarketPriceWithFallback(symbol: string, market: IMarket): number | null {
+  // First try the cached price (from recent Steam API fetch)
+  const cachedPrice = getCachedPrice(symbol);
+  if (cachedPrice && cachedPrice > 0) {
+    return cachedPrice;
+  }
+  
+  // Try the market's oracle price from database (may be from previous server run)
+  if (market.oraclePrice && market.oraclePrice > 0) {
+    // Also update the cache so subsequent calls are fast
+    updateOraclePrice(symbol, market.oraclePrice);
+    return market.oraclePrice;
+  }
+  
+  // Fall back to default price
+  const defaultPrice = DEFAULT_PRICES[symbol.toUpperCase()];
+  if (defaultPrice) {
+    // Update cache with default price
+    updateOraclePrice(symbol, defaultPrice);
+    return defaultPrice;
+  }
+  
+  return null;
+}
 
 interface PlaceOrderParams {
   marketSymbol: string;
@@ -111,12 +151,12 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     }
   }
   
-  // For market orders, get the oracle price
+  // For market orders, get the oracle price (with fallbacks)
   let orderPrice: number;
   if (type === "market") {
-    const oraclePrice = getCachedPrice(marketSymbol);
+    const oraclePrice = getMarketPriceWithFallback(marketSymbol, market);
     if (!oraclePrice) {
-      return { success: false, error: "No price available" };
+      return { success: false, error: "No price available for market" };
     }
     // Use a price far from market to ensure fill
     orderPrice = side === "buy" ? oraclePrice * 1.1 : oraclePrice * 0.9;
@@ -392,6 +432,11 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
           makerOrder.price,
           fillMargin
         );
+        
+        // Award XP to taker for trade execution
+        awardTradeXP(order.userAddress).catch(err => {
+          console.error(`❌ Error awarding trade XP to taker:`, err);
+        });
       }
       
       // Notify maker if not synthetic
@@ -406,6 +451,11 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
           filledQuantity: makerOrder.filledQuantity,
           status: makerOrder.status,
           timestamp: Date.now(),
+        });
+        
+        // Award XP to maker for trade execution
+        awardTradeXP(makerOrder.userAddress).catch(err => {
+          console.error(`❌ Error awarding trade XP to maker:`, err);
         });
         
         // Check trade count achievements for maker

@@ -258,15 +258,15 @@ async function refreshAllMarkets(): Promise<void> {
 async function refreshMarketLiquidity(marketSymbol: string): Promise<void> {
   const symbol = marketSymbol.toUpperCase();
   
-  // Get oracle price as fallback
-  const oraclePrice = getCachedPrice(symbol);
-  if (!oraclePrice || oraclePrice <= 0) {
+  // Get price (oracle or fallback default)
+  const basePrice = getMarketPrice(symbol);
+  if (!basePrice || basePrice <= 0) {
     return; // Skip silently if no price
   }
 
-  // Use current trend price if available, otherwise oracle
+  // Use current trend price if available, otherwise base price
   const trend = marketTrends.get(symbol);
-  const centerPrice = trend?.currentPrice || oraclePrice;
+  const centerPrice = trend?.currentPrice || basePrice;
 
   // 1. Bulk delete all synthetic orders from DB
   await Order.deleteMany({
@@ -512,9 +512,34 @@ const TREND_MIN_DURATION_MS = 5 * 60 * 1000;  // 5 minutes
 const TREND_MAX_DURATION_MS = 8 * 60 * 1000;  // 8 minutes
 const TREND_MIN_MOVE_PERCENT = 1.0;           // 1% minimum move
 const TREND_MAX_MOVE_PERCENT = 2.0;           // 2% maximum move
+const MAX_DRIFT_FROM_ORACLE_PERCENT = 3.0;    // Max 3% drift from oracle before forced reversion
+
+// Default prices for markets when oracle is unavailable (fallback)
+const DEFAULT_PRICES: Record<string, number> = {
+  "AK47-REDLINE-PERP": 45.00,
+  "GLOVE-CASE-PERP": 25.00,
+  "WEAPON-CASE-3-PERP": 15.00,
+  // Stocks (if still used)
+  "AAPL-PERP": 250.00,
+  "GOOGL-PERP": 175.00,
+  "MSFT-PERP": 450.00,
+};
+
+/**
+ * Get price for a market - oracle price, or fallback to default
+ */
+function getMarketPrice(symbol: string): number | null {
+  const oracle = getCachedPrice(symbol);
+  if (oracle && oracle > 0) {
+    return oracle;
+  }
+  // Fallback to default price
+  return DEFAULT_PRICES[symbol.toUpperCase()] || null;
+}
 
 /**
  * Get or create trend state for a market
+ * Includes mean reversion to keep price near oracle
  */
 function getOrCreateTrend(symbol: string): TrendState | null {
   const existing = marketTrends.get(symbol);
@@ -525,33 +550,61 @@ function getOrCreateTrend(symbol: string): TrendState | null {
     return existing; // Current trend still active
   }
   
-  // Get base price (oracle price or last trade price)
-  const oraclePrice = getCachedPrice(symbol);
-  const basePrice = existing?.currentPrice || oraclePrice;
-  
-  if (!basePrice) {
+  // Get oracle price (or fallback default)
+  const oraclePrice = getMarketPrice(symbol);
+  if (!oraclePrice) {
     return null;
   }
   
-  // Create new trend
-  const direction: "up" | "down" = Math.random() > 0.5 ? "up" : "down";
-  const movePercent = TREND_MIN_MOVE_PERCENT + Math.random() * (TREND_MAX_MOVE_PERCENT - TREND_MIN_MOVE_PERCENT);
+  // Use current trade price or oracle as base
+  const currentPrice = existing?.currentPrice || oraclePrice;
+  
+  // Calculate drift from oracle
+  const driftPercent = ((currentPrice - oraclePrice) / oraclePrice) * 100;
+  const absDrift = Math.abs(driftPercent);
+  
+  // Determine trend direction with mean reversion bias
+  let direction: "up" | "down";
+  let movePercent: number;
+  
+  if (absDrift > MAX_DRIFT_FROM_ORACLE_PERCENT) {
+    // Force reversion toward oracle - we've drifted too far
+    direction = driftPercent > 0 ? "down" : "up";
+    // Move enough to get back within bounds
+    movePercent = absDrift - (MAX_DRIFT_FROM_ORACLE_PERCENT * 0.5);
+    console.log(`⚠️ ${symbol}: Forcing reversion to oracle (drift: ${driftPercent.toFixed(2)}%)`);
+  } else if (absDrift > MAX_DRIFT_FROM_ORACLE_PERCENT * 0.5) {
+    // Moderate drift - bias toward oracle (70% chance to revert)
+    const shouldRevert = Math.random() < 0.7;
+    if (shouldRevert) {
+      direction = driftPercent > 0 ? "down" : "up";
+    } else {
+      direction = Math.random() > 0.5 ? "up" : "down";
+    }
+    movePercent = TREND_MIN_MOVE_PERCENT + Math.random() * (TREND_MAX_MOVE_PERCENT - TREND_MIN_MOVE_PERCENT);
+  } else {
+    // Low drift - random direction with slight bias toward oracle
+    const revertBias = driftPercent > 0 ? 0.4 : 0.6; // Slight bias toward oracle
+    direction = Math.random() < revertBias ? "up" : "down";
+    movePercent = TREND_MIN_MOVE_PERCENT + Math.random() * (TREND_MAX_MOVE_PERCENT - TREND_MIN_MOVE_PERCENT);
+  }
+  
   const durationMs = TREND_MIN_DURATION_MS + Math.random() * (TREND_MAX_DURATION_MS - TREND_MIN_DURATION_MS);
   
   const moveFactor = direction === "up" ? (1 + movePercent / 100) : (1 - movePercent / 100);
-  const targetPrice = basePrice * moveFactor;
+  const targetPrice = currentPrice * moveFactor;
   
   const newTrend: TrendState = {
     direction,
-    startPrice: basePrice,
+    startPrice: currentPrice,
     targetPrice,
     startTime: now,
     durationMs,
-    currentPrice: basePrice,
+    currentPrice: currentPrice,
   };
   
   marketTrends.set(symbol, newTrend);
-  console.log(`📈 ${symbol}: New ${direction} trend - ${movePercent.toFixed(1)}% over ${(durationMs / 60000).toFixed(1)}min ($${basePrice.toFixed(2)} → $${targetPrice.toFixed(2)})`);
+  console.log(`📈 ${symbol}: New ${direction} trend - ${movePercent.toFixed(1)}% over ${(durationMs / 60000).toFixed(1)}min ($${currentPrice.toFixed(2)} → $${targetPrice.toFixed(2)}) [oracle: $${oraclePrice.toFixed(2)}, drift: ${driftPercent.toFixed(1)}%]`);
   
   // Refresh orderbook to center around new trend start price (async, don't await)
   refreshMarketLiquidity(symbol).catch(err => {
@@ -736,6 +789,7 @@ export async function getLiquidityStats(): Promise<{
       currentPrice: number;
       progressPercent: number;
       remainingSeconds: number;
+      driftFromOraclePercent: number | null;
     } | null;
   }>;
 }> {
@@ -767,16 +821,20 @@ export async function getLiquidityStats(): Promise<{
 
       const spread = bestBid && bestAsk ? bestAsk - bestBid : null;
       const oraclePrice = getCachedPrice(market.symbol);
-      const spreadBps = spread && oraclePrice 
-        ? Math.round((spread / oraclePrice) * 10000 * 100) / 100
+      const effectivePrice = getMarketPrice(market.symbol);
+      const spreadBps = spread && effectivePrice 
+        ? Math.round((spread / effectivePrice) * 10000 * 100) / 100
         : null;
 
       // Count unique accounts
       const uniqueAccounts = new Set(orders.map(o => o.userAddress)).size;
 
-      // Get trend info
+      // Get trend info with drift from index price
       const trend = marketTrends.get(market.symbol);
       const now = Date.now();
+      const driftFromOracle = trend && effectivePrice 
+        ? Math.round(((trend.currentPrice - effectivePrice) / effectivePrice) * 10000) / 100
+        : null;
       const trendInfo = trend ? {
         direction: trend.direction,
         startPrice: Math.round(trend.startPrice * 100) / 100,
@@ -784,6 +842,7 @@ export async function getLiquidityStats(): Promise<{
         currentPrice: Math.round(trend.currentPrice * 100) / 100,
         progressPercent: Math.round(Math.min(100, ((now - trend.startTime) / trend.durationMs) * 100)),
         remainingSeconds: Math.max(0, Math.round((trend.durationMs - (now - trend.startTime)) / 1000)),
+        driftFromOraclePercent: driftFromOracle,
       } : null;
 
       return {

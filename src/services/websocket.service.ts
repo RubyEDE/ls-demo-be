@@ -35,6 +35,10 @@ export interface ServerToClientEvents {
   "position:closed": (data: PositionUpdate) => void;
   "position:liquidated": (data: PositionUpdate) => void;
   
+  // XP/Leveling events
+  "xp:gained": (data: XPGainedEvent) => void;
+  "xp:levelup": (data: LevelUpEvent) => void;
+  
   // System events
   "error": (data: { code: string; message: string }) => void;
   "subscribed": (data: { channel: string; symbol?: string; interval?: string }) => void;
@@ -53,6 +57,8 @@ export interface ClientToServerEvents {
   "unsubscribe:candles": (data: { symbol: string; interval?: string } | string) => void;
   "subscribe:funding": (symbol: string) => void;
   "unsubscribe:funding": (symbol: string) => void;
+  "subscribe:xp": () => void;
+  "unsubscribe:xp": () => void;
 }
 
 export interface InterServerEvents {
@@ -172,6 +178,27 @@ export interface FundingPaymentEvent {
   totalLongPayment: number;
   totalShortPayment: number;
   positionsProcessed: number;
+  timestamp: number;
+}
+
+export interface XPGainedEvent {
+  amount: number;
+  reason: string;
+  currentExperience: number;
+  totalExperience: number;
+  level: number;
+  experienceForNextLevel: number;
+  progressPercentage: number;
+  timestamp: number;
+}
+
+export interface LevelUpEvent {
+  previousLevel: number;
+  newLevel: number;
+  levelsGained: number;
+  currentExperience: number;
+  totalExperience: number;
+  experienceForNextLevel: number;
   timestamp: number;
 }
 
@@ -333,6 +360,28 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
       socket.emit("unsubscribed", { channel: "funding", symbol: symbol.toUpperCase() });
     });
 
+    // Handle XP subscriptions (requires authentication)
+    socket.on("subscribe:xp", () => {
+      if (!socket.data.authenticated || !socket.data.address) {
+        socket.emit("error", { code: "UNAUTHORIZED", message: "Authentication required to subscribe to XP events" });
+        return;
+      }
+      const channel = `xp:${socket.data.address.toLowerCase()}`;
+      socket.join(channel);
+      addSubscription(channel, socket.id);
+      socket.emit("subscribed", { channel: "xp" });
+      console.log(`✨ ${socket.id} subscribed to XP events`);
+    });
+
+    socket.on("unsubscribe:xp", () => {
+      if (socket.data.address) {
+        const channel = `xp:${socket.data.address.toLowerCase()}`;
+        socket.leave(channel);
+        removeSubscription(channel, socket.id);
+        socket.emit("unsubscribed", { channel: "xp" });
+      }
+    });
+
     // Handle disconnection
     socket.on("disconnect", (reason) => {
       console.log(`📡 WebSocket disconnected: ${socket.id} (${reason})`);
@@ -481,6 +530,26 @@ export function broadcastFundingUpdate(symbol: string, data: FundingUpdate): voi
 export function broadcastFundingPayment(symbol: string, data: FundingPaymentEvent): void {
   if (!io) return;
   io.to(`funding:${symbol.toUpperCase()}`).emit("funding:payment", data);
+}
+
+/**
+ * Send XP gained event to a user
+ */
+export function sendXPGained(userAddress: string, data: XPGainedEvent): void {
+  if (!io) return;
+  io.to(`xp:${userAddress.toLowerCase()}`).emit("xp:gained", data);
+  // Also send to user's main room for backwards compatibility
+  io.to(`user:${userAddress.toLowerCase()}`).emit("xp:gained", data);
+}
+
+/**
+ * Send level up event to a user
+ */
+export function sendLevelUp(userAddress: string, data: LevelUpEvent): void {
+  if (!io) return;
+  io.to(`xp:${userAddress.toLowerCase()}`).emit("xp:levelup", data);
+  // Also send to user's main room for backwards compatibility
+  io.to(`user:${userAddress.toLowerCase()}`).emit("xp:levelup", data);
 }
 
 /**
