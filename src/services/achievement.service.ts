@@ -160,6 +160,48 @@ const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     },
     isActive: true,
   },
+  {
+    id: "first_profitable_close",
+    name: "In the Green",
+    description: "Close a position with profit",
+    category: "trading",
+    icon: "trending-up",
+    points: 25,
+    isProgression: false,
+    requirement: {
+      type: "profitable_closes",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "first_losing_close",
+    name: "Lesson Learned",
+    description: "Close a position with a loss",
+    category: "trading",
+    icon: "trending-down",
+    points: 10,
+    isProgression: false,
+    requirement: {
+      type: "losing_closes",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "zero_balance",
+    name: "Back to Zero",
+    description: "Lose all your funds",
+    category: "trading",
+    icon: "ban",
+    points: 5,
+    isProgression: false,
+    requirement: {
+      type: "zero_balance",
+      threshold: 1,
+    },
+    isActive: true,
+  },
   // Trade count progression achievements
   {
     id: "trades_10",
@@ -944,6 +986,181 @@ export async function checkHighLeverageAchievement(
     };
   } catch (error) {
     console.error(`❌ Error checking high leverage achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check first profitable close achievement for a user
+ * Call this when a position is closed with positive realized PnL
+ */
+export async function checkFirstProfitableCloseAchievement(
+  address: string,
+  realizedPnl: number
+): Promise<AchievementUnlockResult | null> {
+  // Only award if profitable
+  if (realizedPnl <= 0) {
+    return null;
+  }
+
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "first_profitable_close",
+    });
+    
+    if (existing) {
+      return null;
+    }
+    
+    const achievement = await getAchievementById("first_profitable_close");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'first_profitable_close' not found in database`);
+      return null;
+    }
+    
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "first_profitable_close",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (+$${realizedPnl.toFixed(2)} profit)`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking first profitable close achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check first losing close achievement for a user
+ * Call this when a position is closed with negative realized PnL
+ */
+export async function checkFirstLosingCloseAchievement(
+  address: string,
+  realizedPnl: number
+): Promise<AchievementUnlockResult | null> {
+  // Only award if losing
+  if (realizedPnl >= 0) {
+    return null;
+  }
+
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "first_losing_close",
+    });
+    
+    if (existing) {
+      return null;
+    }
+    
+    const achievement = await getAchievementById("first_losing_close");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'first_losing_close' not found in database`);
+      return null;
+    }
+    
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "first_losing_close",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (-$${Math.abs(realizedPnl).toFixed(2)} loss)`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking first losing close achievement:`, error);
+    return null;
+  }
+}
+
+/**
+ * Check zero balance achievement for a user
+ * Call this when a user's balance becomes 0 (both free and locked)
+ */
+export async function checkZeroBalanceAchievement(
+  address: string,
+  free: number,
+  locked: number
+): Promise<AchievementUnlockResult | null> {
+  // Only award if both free and locked are 0
+  if (free !== 0 || locked !== 0) {
+    return null;
+  }
+
+  try {
+    const normalizedAddress = address.toLowerCase();
+    
+    const user = await User.findOne({ address: normalizedAddress });
+    if (!user) {
+      console.warn(`⚠️ User not found for address ${address}`);
+      return null;
+    }
+    
+    const existing = await UserAchievement.findOne({
+      userId: user._id,
+      achievementId: "zero_balance",
+    });
+    
+    if (existing) {
+      return null;
+    }
+    
+    const achievement = await getAchievementById("zero_balance");
+    if (!achievement) {
+      console.warn(`⚠️ Achievement 'zero_balance' not found in database`);
+      return null;
+    }
+    
+    const userAchievement = await UserAchievement.create({
+      userId: user._id,
+      address: normalizedAddress,
+      achievementId: "zero_balance",
+      unlockedAt: new Date(),
+      currentProgress: 1,
+    });
+    
+    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (balance hit zero)`);
+    
+    return {
+      achievement,
+      isNew: true,
+      userAchievement,
+    };
+  } catch (error) {
+    console.error(`❌ Error checking zero balance achievement:`, error);
     return null;
   }
 }

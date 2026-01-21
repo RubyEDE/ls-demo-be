@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
 import { Balance, IBalance, IBalanceChange } from "../models/balance.model";
+import { checkZeroBalanceAchievement } from "./achievement.service";
 
 export interface BalanceOperationResult {
   success: boolean;
@@ -389,6 +390,15 @@ export async function debitBalanceByAddress(
   balance.changes.push(change);
   
   await balance.save();
+  
+  // Check for zero balance achievement
+  if (balance.free === 0 && balance.locked === 0) {
+    try {
+      await checkZeroBalanceAchievement(address, balance.free, balance.locked);
+    } catch (error) {
+      console.error(`❌ Error checking zero balance achievement:`, error);
+    }
+  }
   
   return { success: true, balance };
 }

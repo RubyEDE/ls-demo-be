@@ -3,7 +3,11 @@ import { Position, IPosition, PositionSide } from "../models/position.model";
 import { getMarket, getCachedPrice } from "./market.service";
 import { sendPositionUpdate, PositionUpdate } from "./websocket.service";
 import { lockBalanceByAddress, unlockBalanceByAddress, creditBalanceByAddress } from "./balance.service";
-import { checkHighLeverageAchievement } from "./achievement.service";
+import { 
+  checkHighLeverageAchievement,
+  checkFirstProfitableCloseAchievement,
+  checkFirstLosingCloseAchievement,
+} from "./achievement.service";
 
 interface OpenPositionParams {
   marketSymbol: string;
@@ -321,6 +325,17 @@ export async function decreasePosition(
   broadcastPositionUpdate(position, getCachedPrice(position.marketSymbol) || executionPrice);
   
   console.log(`📊 Decreased position ${position.positionId}: -${closeSize} @ $${executionPrice}, realized PnL: $${realizedPnl.toFixed(2)}`);
+  
+  // Check for profit/loss close achievements
+  try {
+    if (realizedPnl > 0) {
+      await checkFirstProfitableCloseAchievement(position.userAddress, realizedPnl);
+    } else if (realizedPnl < 0) {
+      await checkFirstLosingCloseAchievement(position.userAddress, realizedPnl);
+    }
+  } catch (error) {
+    console.error(`❌ Error checking close achievements:`, error);
+  }
   
   return { success: true, position, realizedPnl };
 }
