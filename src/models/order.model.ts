@@ -28,6 +28,9 @@ export interface IOrder extends Document {
   // Execution
   averagePrice: number;     // Average fill price
   
+  // Margin
+  leverage: number;         // Leverage for this order (1 to maxLeverage)
+  
   // Flags
   isSynthetic: boolean;     // True for fake/market maker orders
   postOnly: boolean;        // Only add to book, don't match
@@ -58,6 +61,8 @@ const OrderSchema = new Schema<IOrder>(
     remainingQuantity: { type: Number, required: true },
     
     averagePrice: { type: Number, default: 0 },
+    
+    leverage: { type: Number, default: 1 },
     
     isSynthetic: { type: Boolean, default: false },
     postOnly: { type: Boolean, default: false },

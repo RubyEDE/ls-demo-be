@@ -14,7 +14,7 @@ import {
   sendBalanceUpdate 
 } from "./websocket.service";
 import { lockBalanceByAddress, unlockBalanceByAddress, getBalanceByAddress } from "./balance.service";
-import { handleTradeExecution } from "./position.service";
+import { handleTradeExecution, getOpenPosition } from "./position.service";
 import { updateCandleFromTrade } from "./candle.service";
 import { 
   checkFirstOrderAchievement, 
@@ -31,6 +31,7 @@ interface PlaceOrderParams {
   type: OrderType;
   price?: number;
   quantity: number;
+  leverage?: number;  // User-specified leverage (1 to maxLeverage), defaults to maxLeverage
   postOnly?: boolean;
   reduceOnly?: boolean;
 }
@@ -60,6 +61,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     type,
     price,
     quantity,
+    leverage: requestedLeverage,
     postOnly = false,
     reduceOnly = false,
   } = params;
@@ -74,13 +76,40 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     return { success: false, error: "Market is not active" };
   }
   
-  // Validate quantity
-  if (quantity < market.minOrderSize) {
-    return { success: false, error: `Minimum order size is ${market.minOrderSize}` };
+  // Validate and set leverage (default to max leverage if not specified)
+  const leverage = requestedLeverage ?? market.maxLeverage;
+  if (leverage < 1 || leverage > market.maxLeverage) {
+    return { success: false, error: `Leverage must be between 1 and ${market.maxLeverage}` };
+  }
+  
+  // Validate quantity (must be positive)
+  if (quantity <= 0) {
+    return { success: false, error: "Order quantity must be greater than 0" };
   }
   
   // Round to lot size
-  const roundedQuantity = roundToLotSize(quantity, market.lotSize);
+  let roundedQuantity = roundToLotSize(quantity, market.lotSize);
+  
+  // For reduceOnly orders, cap quantity to actual position size
+  // This handles cases where position size doesn't align with lot size
+  if (reduceOnly) {
+    const position = await getOpenPosition(userAddress, marketSymbol);
+    if (position) {
+      // Check if this order would reduce the position (opposite side)
+      const wouldReduce = (position.side === "long" && side === "sell") || 
+                          (position.side === "short" && side === "buy");
+      if (wouldReduce) {
+        // Use the smaller of rounded quantity or exact position size
+        // This allows closing fractional positions that don't align with lot size
+        roundedQuantity = Math.min(roundedQuantity, position.size);
+        if (roundedQuantity <= 0) {
+          return { success: false, error: "No position to reduce" };
+        }
+      }
+    } else {
+      return { success: false, error: "No position to reduce" };
+    }
+  }
   
   // For market orders, get the oracle price
   let orderPrice: number;
@@ -98,9 +127,10 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     orderPrice = roundToTickSize(price, market.tickSize);
   }
   
-  // Calculate required margin
+  // Calculate required margin based on leverage
+  // margin = notionalValue / leverage
   const notionalValue = orderPrice * roundedQuantity;
-  const requiredMargin = notionalValue * market.initialMarginRate;
+  const requiredMargin = notionalValue / leverage;
   
   // Lock balance for the order
   const lockResult = await lockBalanceByAddress(
@@ -133,6 +163,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     filledQuantity: 0,
     remainingQuantity: roundedQuantity,
     averagePrice: 0,
+    leverage,
     isSynthetic: false,
     postOnly,
     reduceOnly,
@@ -350,20 +381,17 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
       
       // Handle position update for taker (if not synthetic)
       if (order.userAddress && !order.isSynthetic) {
-        const market = await getMarket(order.marketSymbol);
-        if (market) {
-          // Calculate margin used for this fill
-          const fillMargin = makerOrder.price * fillQty * market.initialMarginRate;
-          
-          await handleTradeExecution(
-            order.userAddress,
-            order.marketSymbol,
-            order.side,
-            fillQty,
-            makerOrder.price,
-            fillMargin
-          );
-        }
+        // Calculate margin used for this fill based on order's leverage
+        const fillMargin = (makerOrder.price * fillQty) / order.leverage;
+        
+        await handleTradeExecution(
+          order.userAddress,
+          order.marketSymbol,
+          order.side,
+          fillQty,
+          makerOrder.price,
+          fillMargin
+        );
       }
       
       // Notify maker if not synthetic
@@ -430,12 +458,9 @@ export async function cancelOrder(orderId: string, userAddress: string): Promise
   order.cancelledAt = new Date();
   await order.save();
   
-  // Unlock margin
-  const market = await getMarket(order.marketSymbol);
-  if (market) {
-    const unlockedMargin = order.price * order.remainingQuantity * market.initialMarginRate;
-    await unlockBalanceByAddress(userAddress, unlockedMargin, `Cancelled order ${orderId}`);
-  }
+  // Unlock margin based on order's leverage
+  const unlockedMargin = (order.price * order.remainingQuantity) / order.leverage;
+  await unlockBalanceByAddress(userAddress, unlockedMargin, `Cancelled order ${orderId}`);
   
   // Notify user
   sendOrderUpdate(userAddress, "order:cancelled", {

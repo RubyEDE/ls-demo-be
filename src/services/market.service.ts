@@ -180,7 +180,13 @@ export function roundToTickSize(price: number, tickSize: number): number {
 
 /**
  * Round quantity to market lot size
+ * Never rounds positive quantities to zero (returns lotSize as minimum)
  */
 export function roundToLotSize(quantity: number, lotSize: number): number {
-  return Math.round(quantity / lotSize) * lotSize;
+  const rounded = Math.round(quantity / lotSize) * lotSize;
+  // Prevent rounding positive quantities to zero
+  if (rounded === 0 && quantity > 0) {
+    return lotSize;
+  }
+  return rounded;
 }

@@ -186,7 +186,7 @@ router.post("/orders", authMiddleware, async (req: Request, res: Response) => {
   const authReq = req as AuthenticatedRequest;
   
   try {
-    const { marketSymbol, side, type, price, quantity, postOnly, reduceOnly } = req.body;
+    const { marketSymbol, side, type, price, quantity, leverage, postOnly, reduceOnly } = req.body;
     
     // Validate required fields
     if (!marketSymbol || !side || !type || !quantity) {
@@ -224,6 +224,7 @@ router.post("/orders", authMiddleware, async (req: Request, res: Response) => {
       type,
       price,
       quantity,
+      leverage,
       postOnly,
       reduceOnly,
     });
