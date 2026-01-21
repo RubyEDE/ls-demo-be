@@ -26,7 +26,7 @@ const lastKnownPrices = new Map<string, number>();
  * Get the price to use for a new candle (in priority order):
  * 1. Last trade price (from lastKnownPrices)
  * 2. Previous candle's close price
- * 3. Oracle/finnhub price (ONLY for very first candle ever)
+ * 3. Oracle/Steam price (ONLY for very first candle ever)
  */
 async function getPriceForNewCandle(symbol: string): Promise<number | null> {
   // 1. First priority: last trade price

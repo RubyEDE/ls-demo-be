@@ -5,18 +5,23 @@ import { config } from "./config/env";
 import { connectDatabase } from "./config/database";
 import authRoutes from "./routes/auth.routes";
 import faucetRoutes from "./routes/faucet.routes";
-import finnhubRoutes from "./routes/finnhub.routes";
 import clobRoutes from "./routes/clob.routes";
 import achievementRoutes from "./routes/achievement.routes";
 import referralRoutes from "./routes/referral.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
-import { startPriceFeedManager, getPollingSymbols } from "./services/price-feed.service";
-import { initializeMarkets, startRequiredPriceUpdates } from "./services/market.service";
+import { initializeMarkets } from "./services/market.service";
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
 import { initializeOrderBooks } from "./services/orderbook.service";
 import { initializeAchievements } from "./services/achievement.service";
 import { startLiquidationEngine } from "./services/liquidation.service";
 import { startFundingEngine, getFundingStats } from "./services/funding.service";
+import { 
+  initLightMarketMaker, 
+  startLightMarketMaker, 
+  getLiquidityStats,
+  isMarketMakerRunning 
+} from "./services/light-market-maker.service";
+import { startAllSteamPricePolling, getConfiguredItems, getAllCachedPrices } from "./services/steam-oracle.service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,20 +34,32 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get("/health", (_req, res) => {
+app.get("/health", async (_req, res) => {
   const fundingStats = getFundingStats();
+  const liquidityStats = await getLiquidityStats();
+  const steamPrices = getAllCachedPrices();
+  const csgoItems = getConfiguredItems();
+  
   res.json({ 
     status: "ok", 
     timestamp: new Date().toISOString(),
     market: getMarketStatus(),
     websocket: {
       activeChannels: getActiveChannels(),
-      pollingSymbols: getPollingSymbols(),
+    },
+    steamOracle: {
+      configuredItems: csgoItems.length,
+      cachedPrices: steamPrices.size,
+      items: csgoItems.map(item => item.symbol),
     },
     funding: {
       isRunning: fundingStats.isRunning,
       totalProcessed: fundingStats.totalFundingProcessed,
       lastFundingAt: fundingStats.lastFundingAt?.toISOString() || null,
+    },
+    marketMaker: {
+      isRunning: liquidityStats.isRunning,
+      markets: liquidityStats.markets.length,
     },
   });
 });
@@ -50,7 +67,6 @@ app.get("/health", (_req, res) => {
 // Routes
 app.use("/auth", authRoutes);
 app.use("/faucet", faucetRoutes);
-app.use("/finnhub", finnhubRoutes);
 app.use("/clob", clobRoutes);
 app.use("/achievements", achievementRoutes);
 app.use("/referrals", referralRoutes);
@@ -71,17 +87,14 @@ async function start() {
   // Initialize achievements
   await initializeAchievements();
   
-  // Initialize perpetual markets
+  // Initialize CS:GO perpetual markets
   await initializeMarkets();
   
-  // Start price updates for required markets
-  await startRequiredPriceUpdates(30000);
+  // Start Steam price polling for CS:GO items (60s interval to respect rate limits)
+  await startAllSteamPricePolling(60000);
   
   // Initialize candle data and start 1-min candle generator
   await initializeCandles();
-  
-  // Start price feed manager for auto-polling
-  startPriceFeedManager();
   
   // Initialize orderbooks with real user orders (no synthetic liquidity)
   await initializeOrderBooks();
@@ -92,9 +105,35 @@ async function start() {
   // Start funding rate engine (checks every minute for due funding)
   startFundingEngine(60000);
   
+  // Initialize and start the light market maker (after a delay to ensure prices are loaded)
+  initLightMarketMaker({
+    numAccounts: 500,          // 500 synthetic accounts
+    spreadBps: 20,             // 0.2% spread
+    numLevels: 50,             // 50 price levels per side
+    levelSpacingBps: 5,        // 0.05% between levels
+    baseOrderSize: 0.5,        // 0.5 units base size
+    sizeMultiplier: 1.05,      // 5% more at each deeper level
+    sizeVariance: 0.3,         // 30% random variance
+    ordersPerLevel: 3,         // 3 orders per price level
+    refreshIntervalMs: 30000,  // Refresh every 30 seconds
+    enableTradeGeneration: true,
+    tradeIntervalMs: 2000,     // Generate trades every 2 seconds
+    minTradesPerInterval: 1,
+    maxTradesPerInterval: 5,
+    minTradeSize: 0.1,
+    maxTradeSize: 2.0,
+  });
+  
+  // Start market maker after a short delay to ensure prices are loaded
+  setTimeout(async () => {
+    await startLightMarketMaker();
+  }, 5000);
+  
+  const csgoItems = getConfiguredItems();
   httpServer.listen(config.port, () => {
-    console.log(`🚀 EVM Auth Server running on http://localhost:${config.port}`);
+    console.log(`🎮 CS:GO Perps DEX running on http://localhost:${config.port}`);
     console.log(`📡 WebSocket server running on ws://localhost:${config.port}`);
+    console.log(`📦 Trading ${csgoItems.length} CS:GO items: ${csgoItems.map(i => i.symbol).join(", ")}`);
     console.log(`
 Available endpoints:
   Auth:
@@ -132,19 +171,12 @@ Available endpoints:
     GET  /referrals/leaderboard     - Get referral leaderboard (public)
     GET  /referrals/global-stats    - Get global referral stats (public)
   
-  Finnhub (Market Data):
-    GET  /finnhub/quote/:symbol        - Get stock quote
-    GET  /finnhub/quotes?symbols=...   - Get multiple quotes
-    GET  /finnhub/candles/:symbol      - Get OHLCV candles (?interval=1m&limit=100)
-    GET  /finnhub/profile/:symbol      - Get company profile
-    GET  /finnhub/financials/:symbol   - Get basic financials
-    GET  /finnhub/news/market          - Get market news
-    GET  /finnhub/news/company/:symbol - Get company news
-    GET  /finnhub/search?q=...         - Search symbols
-    GET  /finnhub/earnings             - Get earnings calendar
+  Steam Oracle (CS:GO Prices):
+    Prices are fetched automatically from Steam Community Market
+    Add new items in src/config/csgo-markets.config.ts
   
   CLOB (Perpetuals Trading):
-    GET  /clob/markets              - Get all active markets
+    GET  /clob/markets              - Get all active CS:GO markets
     GET  /clob/markets/:symbol      - Get market details
     GET  /clob/orderbook/:symbol    - Get order book
     GET  /clob/trades/:symbol       - Get recent trades
@@ -162,7 +194,7 @@ Available endpoints:
     GET  /clob/positions/history    - Get closed positions (auth required)
   
   Candles (Price Charts):
-    GET  /clob/market-status         - Get market open/closed status
+    GET  /clob/market-status         - Get market status
     GET  /clob/candles/:symbol       - Get candle data (?interval=1m&limit=100)
     GET  /clob/candles/:symbol/status - Check if enough candle data exists
   
@@ -171,6 +203,14 @@ Available endpoints:
     GET  /clob/funding/:symbol/history - Get funding payment history
     GET  /clob/funding/:symbol/estimate - Estimate funding for position (?side=long&size=1)
     GET  /clob/funding-stats         - Get global funding statistics
+  
+  Market Maker (Admin):
+    GET  /clob/market-maker/stats    - Get market maker stats & liquidity
+    POST /clob/market-maker/start    - Start the market maker
+    POST /clob/market-maker/stop     - Stop the market maker
+    POST /clob/market-maker/refresh  - Force refresh liquidity (body: { market? })
+    GET  /clob/market-maker/config   - Get market maker config
+    PUT  /clob/market-maker/config   - Update market maker config
   
   WebSocket Events:
     subscribe:price <symbol>     - Subscribe to price updates

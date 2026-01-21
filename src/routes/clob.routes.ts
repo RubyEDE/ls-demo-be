@@ -3,7 +3,7 @@ import { authMiddleware } from "../middleware/auth.middleware";
 import { AuthenticatedRequest } from "../types";
 import { getActiveMarkets, getMarket, getCachedPrice } from "../services/market.service";
 import { getOrderBookSnapshot, getSpread } from "../services/orderbook.service";
-import { getSyntheticOrderCount } from "../services/marketmaker.service";
+import { getSyntheticOrderCount } from "../services/light-market-maker.service";
 import { 
   placeOrder, 
   cancelOrder, 
@@ -84,7 +84,7 @@ router.get("/markets/:symbol", async (req: Request, res: Response) => {
     
     const price = getCachedPrice(market.symbol);
     const spread = getSpread(market.symbol);
-    const syntheticOrders = getSyntheticOrderCount(market.symbol);
+    const syntheticOrders = await getSyntheticOrderCount(market.symbol);
     
     res.json({
       symbol: market.symbol,
@@ -930,6 +930,135 @@ router.get("/funding-stats", async (_req: Request, res: Response) => {
   } catch (error) {
     console.error("Error fetching funding stats:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch funding stats" });
+  }
+});
+
+// ============ Market Maker Admin Endpoints ============
+
+import { 
+  getLiquidityStats, 
+  startLightMarketMaker, 
+  stopLightMarketMaker, 
+  forceRefreshAll,
+  forceRefreshMarket,
+  updateMarketMakerConfig,
+  isMarketMakerRunning,
+  getMarketMakerConfig,
+} from "../services/light-market-maker.service";
+
+/**
+ * GET /clob/market-maker/stats
+ * Get market maker statistics and liquidity info
+ */
+router.get("/market-maker/stats", async (_req: Request, res: Response) => {
+  try {
+    const stats = await getLiquidityStats();
+    res.json(stats);
+  } catch (error) {
+    console.error("Error fetching market maker stats:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch market maker stats" });
+  }
+});
+
+/**
+ * POST /clob/market-maker/start
+ * Start the light market maker
+ */
+router.post("/market-maker/start", async (_req: Request, res: Response) => {
+  try {
+    if (isMarketMakerRunning()) {
+      return res.json({ success: true, message: "Market maker is already running" });
+    }
+    
+    await startLightMarketMaker();
+    res.json({ success: true, message: "Market maker started" });
+  } catch (error) {
+    console.error("Error starting market maker:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to start market maker" });
+  }
+});
+
+/**
+ * POST /clob/market-maker/stop
+ * Stop the light market maker
+ */
+router.post("/market-maker/stop", async (_req: Request, res: Response) => {
+  try {
+    if (!isMarketMakerRunning()) {
+      return res.json({ success: true, message: "Market maker is not running" });
+    }
+    
+    await stopLightMarketMaker();
+    res.json({ success: true, message: "Market maker stopped" });
+  } catch (error) {
+    console.error("Error stopping market maker:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to stop market maker" });
+  }
+});
+
+/**
+ * POST /clob/market-maker/refresh
+ * Force refresh liquidity for all markets or a specific market
+ */
+router.post("/market-maker/refresh", async (req: Request, res: Response) => {
+  try {
+    const { market } = req.body as { market?: string };
+    
+    if (market) {
+      await forceRefreshMarket(market);
+      res.json({ success: true, message: `Refreshed liquidity for ${market}` });
+    } else {
+      await forceRefreshAll();
+      res.json({ success: true, message: "Refreshed liquidity for all markets" });
+    }
+  } catch (error) {
+    console.error("Error refreshing liquidity:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to refresh liquidity" });
+  }
+});
+
+/**
+ * GET /clob/market-maker/config
+ * Get current market maker configuration
+ */
+router.get("/market-maker/config", (_req: Request, res: Response) => {
+  try {
+    const config = getMarketMakerConfig();
+    res.json(config);
+  } catch (error) {
+    console.error("Error fetching market maker config:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch config" });
+  }
+});
+
+/**
+ * PUT /clob/market-maker/config
+ * Update market maker configuration
+ */
+router.put("/market-maker/config", async (req: Request, res: Response) => {
+  try {
+    const newConfig = req.body as {
+      spreadBps?: number;
+      numLevels?: number;
+      levelSpacingBps?: number;
+      baseOrderSize?: number;
+      sizeMultiplier?: number;
+      refreshIntervalMs?: number;
+      enabledMarkets?: string[];
+    };
+    
+    updateMarketMakerConfig(newConfig);
+    
+    // Force refresh to apply new config
+    if (isMarketMakerRunning()) {
+      await forceRefreshAll();
+    }
+    
+    const updatedConfig = getMarketMakerConfig();
+    res.json({ success: true, config: updatedConfig });
+  } catch (error) {
+    console.error("Error updating market maker config:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to update config" });
   }
 });
 

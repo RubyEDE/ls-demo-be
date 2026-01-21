@@ -20,7 +20,7 @@ import { mainnet } from "viem/chains";
 const BASE_URL = "http://localhost:3000";
 const WS_URL = "ws://localhost:3000";
 
-const MARKETS = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];
+const MARKETS = ["WEAPON-CASE-3-PERP", "AK47-REDLINE-PERP", "GLOVE-CASE-PERP"];
 
 // Interfaces
 interface PriceUpdate {
@@ -337,14 +337,14 @@ async function runTest(): Promise<void> {
   // ============================================================
   printSeparator("PHASE 6: Execute a Trade");
   
-  // Get current AAPL price
-  const aaplRes = await fetch(`${BASE_URL}/clob/markets/AAPL-PERP`);
-  const aaplMarket = await aaplRes.json();
-  const currentPrice = aaplMarket.oraclePrice;
+  // Get current CS:GO Case price
+  const marketRes = await fetch(`${BASE_URL}/clob/markets/WEAPON-CASE-3-PERP`);
+  const marketData = await marketRes.json();
+  const currentPrice = marketData.oraclePrice;
   
-  console.log(`📊 Current AAPL-PERP price: ${formatPrice(currentPrice)}`);
-  console.log(`   Best Bid: ${formatPrice(aaplMarket.bestBid)}`);
-  console.log(`   Best Ask: ${formatPrice(aaplMarket.bestAsk)}\n`);
+  console.log(`📊 Current WEAPON-CASE-3-PERP price: ${formatPrice(currentPrice)}`);
+  console.log(`   Best Bid: ${formatPrice(marketData.bestBid)}`);
+  console.log(`   Best Ask: ${formatPrice(marketData.bestAsk)}\n`);
   
   // Check if we have enough balance
   const marginRequired = currentPrice * 0.1 * 0.1; // 0.1 shares at 10% margin
@@ -353,7 +353,7 @@ async function runTest(): Promise<void> {
   if (balance.free < marginRequired) {
     console.log("   ⚠️ Insufficient balance for trade demo\n");
   } else {
-    console.log("\n🚀 Placing MARKET BUY order for 0.1 AAPL-PERP...\n");
+    console.log("\n🚀 Placing MARKET BUY order for 1 WEAPON-CASE-3-PERP...\n");
     
     const orderRes = await fetch(`${BASE_URL}/clob/orders`, {
       method: "POST",
@@ -362,7 +362,7 @@ async function runTest(): Promise<void> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        marketSymbol: "AAPL-PERP",
+        marketSymbol: "WEAPON-CASE-3-PERP",
         side: "buy",
         type: "market",
         quantity: 0.1,

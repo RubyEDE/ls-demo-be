@@ -106,7 +106,7 @@ async function testAtRiskPositions(): Promise<void> {
 async function testLiquidationRiskWithAuth(token: string): Promise<void> {
   console.log("4. Testing liquidation risk for authenticated user...");
   
-  const markets = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];
+  const markets = ["WEAPON-CASE-3-PERP", "AK47-REDLINE-PERP", "GLOVE-CASE-PERP"];
   
   for (const market of markets) {
     try {

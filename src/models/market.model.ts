@@ -1,25 +1,26 @@
 import mongoose, { Schema, Document } from "mongoose";
+import { CSGO_ITEMS } from "../config/csgo-markets.config";
 
 export interface IMarket extends Document {
-  symbol: string;           // e.g., "SP500-PERP"
-  name: string;             // e.g., "S&P 500 Perpetual"
-  baseAsset: string;        // e.g., "SP500"
+  symbol: string;           // e.g., "AK47-REDLINE-PERP"
+  name: string;             // e.g., "AK-47 Redline Perpetual"
+  baseAsset: string;        // e.g., "AK47-REDLINE"
   quoteAsset: string;       // e.g., "USD"
-  finnhubSymbol: string;    // e.g., "SPY" - the symbol to fetch price from
+  steamMarketHashName: string;  // Steam market hash name for price fetching
   
-  // Current oracle price (from Finnhub)
+  // Current oracle price (from Steam)
   oraclePrice: number;
   oraclePriceUpdatedAt: Date;
   
   // Market parameters
   tickSize: number;         // Minimum price increment (e.g., 0.01)
-  lotSize: number;          // Minimum quantity increment (e.g., 0.001)
+  lotSize: number;          // Minimum quantity increment (e.g., 1 for items)
   minOrderSize: number;     // Minimum order quantity
   
   // Leverage settings
-  maxLeverage: number;      // e.g., 20 for 20x
-  initialMarginRate: number; // e.g., 0.05 for 5%
-  maintenanceMarginRate: number; // e.g., 0.025 for 2.5%
+  maxLeverage: number;      // e.g., 10 for 10x
+  initialMarginRate: number; // e.g., 0.1 for 10%
+  maintenanceMarginRate: number; // e.g., 0.05 for 5%
   
   // Funding rate (for perpetuals)
   fundingRate: number;
@@ -45,18 +46,18 @@ const MarketSchema = new Schema<IMarket>(
     name: { type: String, required: true },
     baseAsset: { type: String, required: true },
     quoteAsset: { type: String, required: true, default: "USD" },
-    finnhubSymbol: { type: String, required: true },
+    steamMarketHashName: { type: String, required: true },
     
     oraclePrice: { type: Number, default: 0 },
     oraclePriceUpdatedAt: { type: Date, default: Date.now },
     
     tickSize: { type: Number, required: true, default: 0.01 },
-    lotSize: { type: Number, required: true, default: 0.001 },
-    minOrderSize: { type: Number, required: true, default: 0.001 },
+    lotSize: { type: Number, required: true, default: 1 },
+    minOrderSize: { type: Number, required: true, default: 1 },
     
-    maxLeverage: { type: Number, required: true, default: 20 },
-    initialMarginRate: { type: Number, required: true, default: 0.05 },
-    maintenanceMarginRate: { type: Number, required: true, default: 0.025 },
+    maxLeverage: { type: Number, required: true, default: 10 },
+    initialMarginRate: { type: Number, required: true, default: 0.1 },
+    maintenanceMarginRate: { type: Number, required: true, default: 0.05 },
     
     fundingRate: { type: Number, default: 0 },
     fundingInterval: { type: Number, default: 8 }, // 8 hours
@@ -77,53 +78,25 @@ const MarketSchema = new Schema<IMarket>(
 );
 
 // Index for quick lookups
-MarketSchema.index({ finnhubSymbol: 1 });
+MarketSchema.index({ steamMarketHashName: 1 });
 MarketSchema.index({ status: 1 });
 
 export const Market = mongoose.model<IMarket>("Market", MarketSchema);
 
-// Required markets - always ensure these exist on startup
-export const REQUIRED_MARKETS = [
-  {
-    symbol: "AAPL-PERP",
-    name: "Apple Perpetual",
-    baseAsset: "AAPL",
-    quoteAsset: "USD",
-    finnhubSymbol: "AAPL",
-    tickSize: 0.01,
-    lotSize: 0.01,
-    minOrderSize: 0.01,
-    maxLeverage: 10,
-    initialMarginRate: 0.1,
-    maintenanceMarginRate: 0.05,
-  },
-  {
-    symbol: "GOOGL-PERP",
-    name: "Alphabet Perpetual",
-    baseAsset: "GOOGL",
-    quoteAsset: "USD",
-    finnhubSymbol: "GOOGL",
-    tickSize: 0.01,
-    lotSize: 0.01,
-    minOrderSize: 0.01,
-    maxLeverage: 10,
-    initialMarginRate: 0.1,
-    maintenanceMarginRate: 0.05,
-  },
-  {
-    symbol: "MSFT-PERP",
-    name: "Microsoft Perpetual",
-    baseAsset: "MSFT",
-    quoteAsset: "USD",
-    finnhubSymbol: "MSFT",
-    tickSize: 0.01,
-    lotSize: 0.01,
-    minOrderSize: 0.01,
-    maxLeverage: 10,
-    initialMarginRate: 0.1,
-    maintenanceMarginRate: 0.05,
-  },
-];
+// Required markets - CS:GO items from config
+export const REQUIRED_MARKETS = CSGO_ITEMS.map(item => ({
+  symbol: item.symbol,
+  name: item.name,
+  baseAsset: item.baseAsset,
+  quoteAsset: "USD",
+  steamMarketHashName: item.steamMarketHashName,
+  tickSize: item.tickSize ?? 0.01,
+  lotSize: item.lotSize ?? 1,
+  minOrderSize: item.minOrderSize ?? 1,
+  maxLeverage: item.maxLeverage ?? 10,
+  initialMarginRate: item.initialMarginRate ?? 0.1,
+  maintenanceMarginRate: item.maintenanceMarginRate ?? 0.05,
+}));
 
 // Alias for backwards compatibility
 export const INITIAL_MARKETS = REQUIRED_MARKETS;

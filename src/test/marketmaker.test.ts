@@ -1,7 +1,7 @@
 /**
  * Market Maker Test
  * 
- * Tests that the 3 required markets (AAPL, GOOGL, MSFT) have:
+ * Tests that the CS:GO markets have:
  * - Active markets with price data
  * - Synthetic orderbook liquidity
  * - Proper bid/ask spreads
@@ -14,7 +14,7 @@ export {};
 
 const BASE_URL = "http://localhost:3000";
 
-const REQUIRED_MARKETS = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];
+const REQUIRED_MARKETS = ["WEAPON-CASE-3-PERP", "AK47-REDLINE-PERP", "GLOVE-CASE-PERP"];
 
 interface Market {
   symbol: string;

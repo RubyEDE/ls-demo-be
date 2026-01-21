@@ -84,7 +84,7 @@ async function testWebSocketConnection(): Promise<void> {
   });
   
   // Test 2: Subscribe to price updates (unauthenticated)
-  console.log("2️⃣  Subscribing to AAPL price updates...");
+  console.log("2️⃣  Subscribing to WEAPON-CASE-3-PERP price updates...");
   
   await new Promise<void>((resolve) => {
     unauthSocket.on("subscribed", (data) => {
@@ -92,7 +92,7 @@ async function testWebSocketConnection(): Promise<void> {
       resolve();
     });
     
-    unauthSocket.emit("subscribe:price", "AAPL");
+    unauthSocket.emit("subscribe:price", "WEAPON-CASE-3-PERP");
   });
   
   // Test 3: Wait for price update
@@ -124,7 +124,7 @@ async function testWebSocketConnection(): Promise<void> {
       resolve();
     });
     
-    unauthSocket.emit("unsubscribe:price", "AAPL");
+    unauthSocket.emit("unsubscribe:price", "WEAPON-CASE-3-PERP");
   });
   
   // Clean up unauthenticated socket

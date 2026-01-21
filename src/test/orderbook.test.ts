@@ -18,7 +18,7 @@ import { mainnet } from "viem/chains";
 
 const BASE_URL = "http://localhost:3000";
 const WS_URL = "ws://localhost:3000";
-const TEST_MARKET = "AAPL-PERP";
+const TEST_MARKET = "WEAPON-CASE-3-PERP";
 
 // Interfaces
 interface OrderBookEntry {

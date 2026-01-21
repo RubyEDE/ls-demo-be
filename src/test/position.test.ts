@@ -126,14 +126,14 @@ async function testPositions(): Promise<void> {
   console.log(`      Total Equity: $${summary.totalEquity.toFixed(2)}\n`);
   
   // Test 5: Get markets to find a good price - wait for prices to load
-  console.log("5️⃣  Fetching market info for AAPL-PERP...");
+  console.log("5️⃣  Fetching market info for WEAPON-CASE-3-PERP...");
   
   // Wait for price updates to arrive
   let oraclePrice: number | null = null;
   let marketData: { oraclePrice: number | null; bestBid: number | null; bestAsk: number | null } = { oraclePrice: null, bestBid: null, bestAsk: null };
   
   for (let i = 0; i < 5; i++) {
-    const marketRes = await fetch(`${BASE_URL}/clob/markets/AAPL-PERP`);
+    const marketRes = await fetch(`${BASE_URL}/clob/markets/WEAPON-CASE-3-PERP`);
     marketData = await marketRes.json() as typeof marketData;
     oraclePrice = marketData.oraclePrice;
     
@@ -158,7 +158,7 @@ async function testPositions(): Promise<void> {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({
-      marketSymbol: "AAPL-PERP",
+      marketSymbol: "WEAPON-CASE-3-PERP",
       side: "buy",
       type: "market",
       quantity: 0.1,
@@ -185,7 +185,7 @@ async function testPositions(): Promise<void> {
   
   // Test 7: Check position after opening
   console.log("7️⃣  Checking position after trade...");
-  const positionRes = await fetch(`${BASE_URL}/clob/positions/AAPL-PERP`, {
+  const positionRes = await fetch(`${BASE_URL}/clob/positions/WEAPON-CASE-3-PERP`, {
     headers: getAuthHeaders(),
   });
   const positionData = await positionRes.json() as { position: Position | null };
@@ -222,7 +222,7 @@ async function testPositions(): Promise<void> {
   // Test 9: Close position if we have one
   if (positionData.position && positionData.position.size > 0) {
     console.log("9️⃣  Closing position...");
-    const closeRes = await fetch(`${BASE_URL}/clob/positions/AAPL-PERP/close`, {
+    const closeRes = await fetch(`${BASE_URL}/clob/positions/WEAPON-CASE-3-PERP/close`, {
       method: "POST",
       headers: getAuthHeaders(),
       body: JSON.stringify({}),

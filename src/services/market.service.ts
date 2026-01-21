@@ -1,31 +1,41 @@
 import { Market, IMarket, REQUIRED_MARKETS } from "../models/market.model";
-import { getQuote } from "./finnhub.service";
-import { broadcastPriceUpdate } from "./websocket.service";
+import { fetchAndUpdateSteamPrice } from "./steam-oracle.service";
 
 // In-memory cache of market prices
 const priceCache = new Map<string, { price: number; updatedAt: Date }>();
 
 /**
- * Initialize markets - ensure required markets always exist
- * Uses upsert to create missing markets without affecting existing ones
+ * Initialize markets - ensure required CS:GO markets always exist
+ * Also removes any old markets not in the current config
  */
 export async function initializeMarkets(): Promise<void> {
-  console.log("🏪 Ensuring required markets exist...");
+  console.log("🎮 Ensuring required CS:GO markets exist...");
   
+  // Get valid symbols from config
+  const validSymbols = REQUIRED_MARKETS.map(m => m.symbol);
+  
+  // Remove old markets not in current config
+  const oldMarkets = await Market.find({ symbol: { $nin: validSymbols } });
+  if (oldMarkets.length > 0) {
+    console.log(`   🗑️ Removing ${oldMarkets.length} old market(s): ${oldMarkets.map(m => m.symbol).join(", ")}`);
+    await Market.deleteMany({ symbol: { $nin: validSymbols } });
+  }
+  
+  // Create/verify required markets
   for (const marketData of REQUIRED_MARKETS) {
     const existing = await Market.findOne({ symbol: marketData.symbol });
     
     if (!existing) {
       const market = new Market(marketData);
       await market.save();
-      console.log(`   ✅ Created market: ${market.symbol}`);
+      console.log(`   ✅ Created CS:GO market: ${market.symbol}`);
     } else {
-      console.log(`   ✓ Market exists: ${existing.symbol}`);
+      console.log(`   ✓ CS:GO market exists: ${existing.symbol}`);
     }
   }
   
   const activeMarkets = await Market.find({ status: "active" });
-  console.log(`🏪 ${activeMarkets.length} active markets ready: ${activeMarkets.map(m => m.symbol).join(", ")}`);
+  console.log(`🎮 ${activeMarkets.length} active CS:GO markets ready: ${activeMarkets.map(m => m.symbol).join(", ")}`);
 }
 
 /**
@@ -71,32 +81,23 @@ export function getCachedPrice(symbol: string): number | null {
 }
 
 /**
- * Fetch and update price from Finnhub
+ * Fetch and update price from Steam Community Market
  */
 export async function fetchAndUpdatePrice(marketSymbol: string): Promise<number | null> {
   const market = await getMarket(marketSymbol);
   if (!market) return null;
   
   try {
-    const quote = await getQuote(market.finnhubSymbol);
-    const price = quote.currentPrice;
+    // Use Steam oracle service for CS:GO items
+    const price = await fetchAndUpdateSteamPrice(marketSymbol);
     
-    await updateOraclePrice(marketSymbol, price);
-    
-    // NOTE: We intentionally do NOT call setLastKnownPrice here.
-    // lastKnownPrice should ONLY be set by actual trades, not oracle updates.
-    // Candles track trade prices, not oracle prices (like a true perps exchange).
-    
-    // Broadcast price update via WebSocket
-    broadcastPriceUpdate(marketSymbol, {
-      symbol: marketSymbol,
-      price: price,
-      change: quote.change,
-      changePercent: quote.percentChange,
-      high: quote.highPrice,
-      low: quote.lowPrice,
-      timestamp: Date.now(),
-    });
+    if (price !== null) {
+      await updateOraclePrice(marketSymbol, price);
+      
+      // NOTE: We intentionally do NOT call setLastKnownPrice here.
+      // lastKnownPrice should ONLY be set by actual trades, not oracle updates.
+      // Candles track trade prices, not oracle prices (like a true perps exchange).
+    }
     
     return price;
   } catch (error) {
@@ -151,11 +152,10 @@ export async function startAllPriceUpdates(intervalMs: number = 15000): Promise<
 }
 
 /**
- * Start price updates for required markets specifically
- * Ensures AAPL, GOOGL, MSFT always have price data
+ * Start price updates for required CS:GO markets
  */
 export async function startRequiredPriceUpdates(intervalMs: number = 15000): Promise<void> {
-  console.log("📈 Starting price updates for required markets...");
+  console.log("🎮 Starting price updates for CS:GO markets...");
   
   for (const marketData of REQUIRED_MARKETS) {
     startPriceUpdates(marketData.symbol, intervalMs);

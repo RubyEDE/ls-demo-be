@@ -8,6 +8,5 @@ export const config = {
   jwtExpiresIn: "30d",
   domain: process.env.DOMAIN || "localhost",
   origin: process.env.ORIGIN || "http://localhost:3000",
-  mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/evm-auth",
-  finnhubApiKey: process.env.FINNHUB_API_KEY || "",
+  mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/csgo-perps",
 } as const;

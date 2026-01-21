@@ -241,7 +241,7 @@ async function testFundingRateEndpoint(): Promise<boolean> {
   console.log("\n📋 TEST 2: Funding Rate API Endpoint");
   console.log("─".repeat(50));
   
-  const markets = ["AAPL-PERP", "GOOGL-PERP", "MSFT-PERP"];
+  const markets = ["WEAPON-CASE-3-PERP", "AK47-REDLINE-PERP", "GLOVE-CASE-PERP"];
   
   try {
     for (const market of markets) {
@@ -282,7 +282,7 @@ async function testFundingHistoryEndpoint(): Promise<boolean> {
   console.log("─".repeat(50));
   
   try {
-    const res = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP/history?limit=10`);
+    const res = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP/history?limit=10`);
     const data = await res.json() as { marketSymbol: string; fundingHistory: FundingHistoryEntry[]; count: number };
     
     console.log(`   Market: ${data.marketSymbol}`);
@@ -314,10 +314,10 @@ async function testFundingEstimateEndpoint(): Promise<boolean> {
   try {
     // Test different position configurations
     const testCases = [
-      { market: "AAPL-PERP", side: "long", size: 1 },
-      { market: "AAPL-PERP", side: "short", size: 1 },
-      { market: "AAPL-PERP", side: "long", size: 10 },
-      { market: "GOOGL-PERP", side: "long", size: 1 },
+      { market: "WEAPON-CASE-3-PERP", side: "long", size: 1 },
+      { market: "WEAPON-CASE-3-PERP", side: "short", size: 1 },
+      { market: "WEAPON-CASE-3-PERP", side: "long", size: 10 },
+      { market: "AK47-REDLINE-PERP", side: "long", size: 1 },
     ];
     
     for (const tc of testCases) {
@@ -385,7 +385,7 @@ async function testWebSocketFundingSubscription(): Promise<boolean> {
         console.log(`   ✅ WebSocket connected: ${wsSocket?.id}`);
         
         // Subscribe to funding updates
-        wsSocket?.emit("subscribe:funding", "AAPL-PERP");
+        wsSocket?.emit("subscribe:funding", "WEAPON-CASE-3-PERP");
       });
       
       wsSocket.on("subscribed", (data: { channel: string; symbol: string }) => {
@@ -452,7 +452,7 @@ async function testFundingWithPositions(): Promise<boolean> {
     await sleep(500);
     
     // Get oracle price
-    const marketRes = await fetch(`${BASE_URL}/clob/markets/AAPL-PERP`);
+    const marketRes = await fetch(`${BASE_URL}/clob/markets/WEAPON-CASE-3-PERP`);
     const marketData = await marketRes.json() as { oraclePrice: number | null };
     
     if (!marketData.oraclePrice) {
@@ -468,7 +468,7 @@ async function testFundingWithPositions(): Promise<boolean> {
       method: "POST",
       headers: getAuthHeaders(authToken1),
       body: JSON.stringify({
-        marketSymbol: "AAPL-PERP",
+        marketSymbol: "WEAPON-CASE-3-PERP",
         side: "buy",
         type: "market",
         quantity: 0.5,
@@ -488,7 +488,7 @@ async function testFundingWithPositions(): Promise<boolean> {
       method: "POST",
       headers: getAuthHeaders(authToken2),
       body: JSON.stringify({
-        marketSymbol: "AAPL-PERP",
+        marketSymbol: "WEAPON-CASE-3-PERP",
         side: "sell",
         type: "market",
         quantity: 0.5,
@@ -507,12 +507,12 @@ async function testFundingWithPositions(): Promise<boolean> {
     // Get positions and verify accumulated funding field exists
     console.log("\n   Checking positions...");
     
-    const pos1Res = await fetch(`${BASE_URL}/clob/positions/AAPL-PERP`, {
+    const pos1Res = await fetch(`${BASE_URL}/clob/positions/WEAPON-CASE-3-PERP`, {
       headers: getAuthHeaders(authToken1),
     });
     const pos1Data = await pos1Res.json() as { position: Position | null };
     
-    const pos2Res = await fetch(`${BASE_URL}/clob/positions/AAPL-PERP`, {
+    const pos2Res = await fetch(`${BASE_URL}/clob/positions/WEAPON-CASE-3-PERP`, {
       headers: getAuthHeaders(authToken2),
     });
     const pos2Data = await pos2Res.json() as { position: Position | null };
@@ -538,7 +538,7 @@ async function testFundingWithPositions(): Promise<boolean> {
       console.log("\n   Estimated funding payments:");
       
       const estimate1Res = await fetch(
-        `${BASE_URL}/clob/funding/AAPL-PERP/estimate?side=${pos1Data.position.side}&size=${pos1Data.position.size}`
+        `${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP/estimate?side=${pos1Data.position.side}&size=${pos1Data.position.size}`
       );
       const estimate1 = await estimate1Res.json() as FundingEstimate;
       
@@ -546,7 +546,7 @@ async function testFundingWithPositions(): Promise<boolean> {
       
       if (pos2Data.position) {
         const estimate2Res = await fetch(
-          `${BASE_URL}/clob/funding/AAPL-PERP/estimate?side=${pos2Data.position.side}&size=${pos2Data.position.size}`
+          `${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP/estimate?side=${pos2Data.position.side}&size=${pos2Data.position.size}`
         );
         const estimate2 = await estimate2Res.json() as FundingEstimate;
         
@@ -568,7 +568,7 @@ async function testFundingRateCalculation(): Promise<boolean> {
   
   try {
     // Get funding info
-    const res = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP`);
+    const res = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP`);
     const info = await res.json() as FundingInfo;
     
     if (!info.markPrice || !info.indexPrice) {
@@ -621,7 +621,7 @@ async function testNextFundingTime(): Promise<boolean> {
   console.log("─".repeat(50));
   
   try {
-    const res = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP`);
+    const res = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP`);
     const info = await res.json() as FundingInfo;
     
     if (!info.nextFundingTime) {
@@ -666,17 +666,17 @@ async function testFundingPaymentDirection(): Promise<boolean> {
   
   try {
     // Get funding rate
-    const res = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP`);
+    const res = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP`);
     const info = await res.json() as FundingInfo;
     
     const fundingRate = info.fundingRate;
     console.log(`   Current funding rate: ${info.fundingRatePercent}`);
     
     // Get estimates for long and short
-    const longEstRes = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP/estimate?side=long&size=1`);
+    const longEstRes = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP/estimate?side=long&size=1`);
     const longEst = await longEstRes.json() as FundingEstimate;
     
-    const shortEstRes = await fetch(`${BASE_URL}/clob/funding/AAPL-PERP/estimate?side=short&size=1`);
+    const shortEstRes = await fetch(`${BASE_URL}/clob/funding/WEAPON-CASE-3-PERP/estimate?side=short&size=1`);
     const shortEst = await shortEstRes.json() as FundingEstimate;
     
     console.log(`\n   Long position estimate:`);
@@ -736,7 +736,7 @@ async function cleanup(): Promise<void> {
   
   // Close WebSocket
   if (wsSocket) {
-    wsSocket.emit("unsubscribe:funding", "AAPL-PERP");
+    wsSocket.emit("unsubscribe:funding", "WEAPON-CASE-3-PERP");
     wsSocket.disconnect();
     console.log("   WebSocket disconnected");
   }

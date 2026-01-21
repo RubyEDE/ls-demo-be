@@ -70,7 +70,7 @@ interface TestResult {
 
 let authToken: string;
 const testResults: TestResult[] = [];
-const TEST_MARKET = "AAPL-PERP";
+const TEST_MARKET = "WEAPON-CASE-3-PERP";
 
 // ============ Helpers ============
 
