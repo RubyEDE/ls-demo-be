@@ -242,6 +242,7 @@ export interface FundingUpdate {
 ```typescript
 // api/funding.ts
 
+// Set VITE_API_URL to 'https://api.longsword.io' for production
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 export async function getFundingInfo(symbol: string): Promise<FundingInfo> {

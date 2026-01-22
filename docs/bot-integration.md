@@ -24,6 +24,13 @@ The perpetuals DEX provides a REST API and WebSocket server for trading perpetua
 
 ### Base URLs
 
+**Production:**
+```
+REST API:  https://api.longsword.io
+WebSocket: wss://api.longsword.io
+```
+
+**Development:**
 ```
 REST API:  http://localhost:3000
 WebSocket: ws://localhost:3000
@@ -144,7 +151,10 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { mainnet } from 'viem/chains';
 import axios from 'axios';
 
+// Development
 const BASE_URL = 'http://localhost:3000';
+// Production
+// const BASE_URL = 'https://api.longsword.io';
 
 interface AuthResponse {
   token: string;
@@ -209,7 +219,10 @@ export function createAuthenticatedClient(token: string) {
 import { ethers } from 'ethers';
 import axios from 'axios';
 
+// Development
 const BASE_URL = 'http://localhost:3000';
+// Production
+// const BASE_URL = 'https://api.longsword.io';
 
 export async function authenticateWithEthers(privateKey: string): Promise<{
   token: string;
@@ -832,8 +845,12 @@ import axios, { AxiosInstance } from 'axios';
 import { io, Socket } from 'socket.io-client';
 import { authenticate, createAuthenticatedClient } from './auth';
 
+// Development
 const BASE_URL = 'http://localhost:3000';
 const WS_URL = 'ws://localhost:3000';
+// Production
+// const BASE_URL = 'https://api.longsword.io';
+// const WS_URL = 'wss://api.longsword.io';
 
 interface BotConfig {
   privateKey: `0x${string}`;

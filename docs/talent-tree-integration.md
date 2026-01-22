@@ -104,7 +104,9 @@ interface ErrorResponse {
 
 ## API Endpoints
 
-Base URL: `http://localhost:3000`
+Base URL: 
+- **Production:** `https://api.longsword.io`
+- **Development:** `http://localhost:3000`
 
 ### Get User's Talent Tree (Auth Required)
 
@@ -207,6 +209,7 @@ async function getTalentBonuses(token: string): Promise<TalentBonusesResponse> {
 ```typescript
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
+// Production: 'https://api.longsword.io'
 const API_BASE = "http://localhost:3000";
 
 // Helper to get auth token (implement based on your auth setup)

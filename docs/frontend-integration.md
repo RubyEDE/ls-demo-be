@@ -42,6 +42,7 @@ export const config = createConfig({
 import { useState } from 'react';
 import { useAccount, useSignMessage } from 'wagmi';
 
+// Production: 'https://api.longsword.io'
 const API_BASE = 'http://localhost:3000';
 
 interface AuthState {

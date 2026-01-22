@@ -222,6 +222,7 @@ export interface CandleResponse {
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Candle, CandleInterval, CandleResponse, MarketStatus } from '../types/candles';
 
+// Production: 'https://api.longsword.io'
 const API_BASE = 'http://localhost:3000';
 
 function getAuthHeaders() {

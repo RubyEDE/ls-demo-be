@@ -93,6 +93,7 @@ export interface PlaceOrderParams {
 import { useState, useEffect, useCallback } from 'react';
 import { Market } from '../types/clob';
 
+// Production: 'https://api.longsword.io'
 const API_BASE = 'http://localhost:3000';
 
 export function useMarkets() {

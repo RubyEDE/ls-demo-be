@@ -15,6 +15,12 @@ The WebSocket server provides real-time streaming data for:
 
 ### Server URL
 
+**Production:**
+```
+WebSocket: wss://api.longsword.io
+```
+
+**Development:**
 ```
 WebSocket: ws://localhost:3000
 ```
@@ -34,6 +40,7 @@ Authentication is **required** for user-specific events (orders, balance updates
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
+// Production: 'wss://api.longsword.io'
 const WS_URL = 'ws://localhost:3000';
 
 interface PriceUpdate {

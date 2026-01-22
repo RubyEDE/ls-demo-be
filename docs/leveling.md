@@ -19,7 +19,9 @@ Users earn experience points (XP) for various actions. XP accumulates to increas
 
 ## REST API Endpoints
 
-Base URL: `http://localhost:3000`
+Base URL:
+- **Production:** `https://api.longsword.io`
+- **Development:** `http://localhost:3000`
 
 ### Get User Level (Auth Required)
 
@@ -205,6 +207,7 @@ Emitted when user levels up.
 ### Client Example
 
 ```javascript
+// Production: 'wss://api.longsword.io'
 const socket = io("ws://localhost:3000", {
   auth: { token: "your-jwt-token" }
 });

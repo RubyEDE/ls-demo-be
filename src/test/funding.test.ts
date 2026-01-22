@@ -147,7 +147,7 @@ async function authenticate(
   );
   const { message } = (await nonceResponse.json()) as NonceResponse;
   
-  const signature = await walletClient.signMessage({ message });
+  const signature = await walletClient.signMessage({ account, message });
   
   const verifyResponse = await fetch(`${BASE_URL}/auth/verify`, {
     method: "POST",
@@ -265,7 +265,7 @@ async function testFundingRateEndpoint(): Promise<boolean> {
       console.log(`      Interval: ${info.fundingIntervalHours}h`);
       
       if (info.lastFunding) {
-        console.log(`      Last Funding: ${info.lastFunding.fundingRatePercent} at ${new Date(info.lastFunding.timestamp).toLocaleString()}`);
+        console.log(`      Last Funding: ${info.lastFunding.fundingRate} at ${new Date(info.lastFunding.timestamp).toLocaleString()}`);
       }
     }
     

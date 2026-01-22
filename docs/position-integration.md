@@ -234,6 +234,7 @@ export interface ClosePositionResult {
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Position, PositionSummary } from '../types/position';
 
+// Production: 'https://api.longsword.io'
 const API_BASE = 'http://localhost:3000';
 
 function getAuthHeaders() {

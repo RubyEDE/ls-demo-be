@@ -15,6 +15,7 @@ This guide shows how to integrate the faucet and balance system into your fronte
 // hooks/useFaucet.ts
 import { useState, useCallback } from 'react';
 
+// Production: 'https://api.longsword.io'
 const API_BASE = 'http://localhost:3000';
 
 interface Balance {
