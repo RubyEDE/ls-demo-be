@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { UserTalents, IUserTalents } from "../models/talent.model";
 import { User } from "../models/user.model";
+import { checkTalentAchievements, AchievementUnlockResult } from "./achievement.service";
 
 // Talent tree configuration
 export const TALENT_CONFIG = {
@@ -107,6 +108,7 @@ export interface AllocateTalentResult {
   error?: string;
   talents?: IUserTalents;
   newPointsSpent?: number;
+  newAchievements?: AchievementUnlockResult[];
 }
 
 export interface FaucetBonuses {
@@ -340,10 +342,18 @@ export async function allocateTalentPoint(
     `🌟 ${address} allocated 1 point to ${config.name} (now ${currentPoints + 1}/${config.maxPoints})`
   );
 
+  // Check for talent achievements
+  const newAchievements = await checkTalentAchievements(
+    userId,
+    address,
+    updatedTalents.totalPointsSpent
+  );
+
   return {
     success: true,
     talents: updatedTalents,
     newPointsSpent: updatedTalents.totalPointsSpent,
+    newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
   };
 }
 

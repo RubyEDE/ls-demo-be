@@ -51,11 +51,21 @@ interface TalentConfigResponse {
   talents: TalentConfig[];
 }
 
+// Achievement unlock info
+interface AchievementUnlock {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  points: number;
+}
+
 // Allocate talent response
 interface AllocateTalentResponse {
   success: boolean;
   message: string;
   talentTree: TalentTreeResponse;
+  newAchievements?: AchievementUnlock[];
 }
 
 // Reset talents response
@@ -271,11 +281,15 @@ function useAllocateTalent() {
       
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Invalidate talent queries to refetch
       queryClient.invalidateQueries({ queryKey: ["talents"] });
       // Also invalidate faucet stats if faucet bonuses changed
       queryClient.invalidateQueries({ queryKey: ["faucet"] });
+      // Invalidate achievements if new ones were unlocked
+      if (data.newAchievements?.length) {
+        queryClient.invalidateQueries({ queryKey: ["achievements"] });
+      }
     },
   });
 }
@@ -328,6 +342,14 @@ function TalentTreePage() {
   
   const handleAllocate = (talentId: TalentId) => {
     allocateMutation.mutate(talentId, {
+      onSuccess: (data) => {
+        // Show achievement toast if new achievements were unlocked
+        if (data.newAchievements?.length) {
+          data.newAchievements.forEach((achievement) => {
+            toast.success(`Achievement Unlocked: ${achievement.name}! (+${achievement.points} points)`);
+          });
+        }
+      },
       onError: (err) => alert(err.message),
     });
   };
@@ -526,6 +548,21 @@ function OrderForm({ marketSymbol, baseMaxLeverage }: { marketSymbol: string; ba
 | 1 | `leverageBoostSmall` | Risk Taker | 4 | +1 max leverage per point |
 | 2 | `leverageBoostLarge` | High Roller | 1 | +6 max leverage |
 | 3 | `liquidationSave` | Second Chance | 1 | Save from liquidation 1x/day |
+
+---
+
+## Talent Achievements
+
+Achievements are automatically checked when allocating talent points. The response includes any newly unlocked achievements.
+
+| Achievement | Threshold | Points |
+|-------------|-----------|--------|
+| First Talent | 1 point spent | 15 |
+| Budding Potential | 3 points spent | 30 |
+| Growing Power | 5 points spent | 50 |
+| Talent Master | 10 points spent | 100 |
+
+**Total:** 195 achievement points available from talent tree
 
 ---
 

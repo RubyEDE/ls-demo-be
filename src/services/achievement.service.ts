@@ -413,6 +413,71 @@ const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     },
     isActive: true,
   },
+  // Talent tree progression achievements
+  {
+    id: "talent_1",
+    name: "First Talent",
+    description: "Spend your first talent point",
+    category: "talents",
+    icon: "sparkles",
+    points: 15,
+    isProgression: true,
+    progressionGroup: "talent_points",
+    progressionOrder: 1,
+    requirement: {
+      type: "talent_points_spent",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "talent_3",
+    name: "Budding Potential",
+    description: "Spend 3 talent points",
+    category: "talents",
+    icon: "sparkle",
+    points: 30,
+    isProgression: true,
+    progressionGroup: "talent_points",
+    progressionOrder: 2,
+    requirement: {
+      type: "talent_points_spent",
+      threshold: 3,
+    },
+    isActive: true,
+  },
+  {
+    id: "talent_5",
+    name: "Growing Power",
+    description: "Spend 5 talent points",
+    category: "talents",
+    icon: "zap",
+    points: 50,
+    isProgression: true,
+    progressionGroup: "talent_points",
+    progressionOrder: 3,
+    requirement: {
+      type: "talent_points_spent",
+      threshold: 5,
+    },
+    isActive: true,
+  },
+  {
+    id: "talent_10",
+    name: "Talent Master",
+    description: "Spend 10 talent points",
+    category: "talents",
+    icon: "crown",
+    points: 100,
+    isProgression: true,
+    progressionGroup: "talent_points",
+    progressionOrder: 4,
+    requirement: {
+      type: "talent_points_spent",
+      threshold: 10,
+    },
+    isActive: true,
+  },
 ];
 
 export interface AchievementUnlockResult {
@@ -683,25 +748,42 @@ export async function checkProgressionAchievements(
 ): Promise<AchievementUnlockResult[]> {
   console.log(`🔍 checkProgressionAchievements: type=${requirementType}, count=${currentCount}`);
   
-  // Find all achievements that match this requirement type
-  const achievements = await Achievement.find({
+  // Find all achievements that match this requirement type (both unlockable and not yet)
+  const allAchievements = await Achievement.find({
     "requirement.type": requirementType,
-    "requirement.threshold": { $lte: currentCount },
     isActive: true,
   }).sort({ "requirement.threshold": 1 });
   
-  console.log(`🔍 Found ${achievements.length} matching achievements for ${requirementType}`);
-  achievements.forEach(a => console.log(`   - ${a.id}: threshold ${a.requirement.threshold}`));
+  // Separate into unlockable (threshold met) and not yet unlockable
+  const unlockableAchievements = allAchievements.filter(a => a.requirement.threshold <= currentCount);
+  
+  console.log(`🔍 Found ${unlockableAchievements.length}/${allAchievements.length} unlockable achievements for ${requirementType}`);
   
   const newlyUnlocked: AchievementUnlockResult[] = [];
   
-  for (const achievement of achievements) {
+  // Process achievements that can be unlocked
+  for (const achievement of unlockableAchievements) {
     const result = await unlockAchievement(userId, address, achievement.id, currentCount);
     
     if (result && result.isNew) {
       newlyUnlocked.push(result);
     }
   }
+  
+  // Also update progress for ALL existing user achievements of this type (even if threshold not met)
+  // This ensures the displayed progress is always current
+  const normalizedAddress = address.toLowerCase();
+  const achievementIds = allAchievements.map(a => a.id);
+  
+  await UserAchievement.updateMany(
+    {
+      userId,
+      achievementId: { $in: achievementIds },
+    },
+    {
+      $set: { currentProgress: currentCount },
+    }
+  );
   
   return newlyUnlocked;
 }
@@ -730,6 +812,24 @@ export async function checkReferralAchievements(
   console.log(`🔍 Checking referral achievements for ${address} with ${totalCompletedReferrals} completed referrals`);
   const results = await checkProgressionAchievements(userId, address, "completed_referrals", totalCompletedReferrals);
   console.log(`🔍 Referral achievement check result: ${results.length} new achievements`);
+  if (results.length > 0) {
+    results.forEach(r => console.log(`   🏆 Unlocked: ${r.achievement.name}`));
+  }
+  return results;
+}
+
+/**
+ * Check talent tree achievements for a user
+ * Call this after a talent point is allocated
+ */
+export async function checkTalentAchievements(
+  userId: Types.ObjectId,
+  address: string,
+  totalPointsSpent: number
+): Promise<AchievementUnlockResult[]> {
+  console.log(`🔍 Checking talent achievements for ${address} with ${totalPointsSpent} talent points spent`);
+  const results = await checkProgressionAchievements(userId, address, "talent_points_spent", totalPointsSpent);
+  console.log(`🔍 Talent achievement check result: ${results.length} new achievements`);
   if (results.length > 0) {
     results.forEach(r => console.log(`   🏆 Unlocked: ${r.achievement.name}`));
   }
@@ -1031,60 +1131,39 @@ export async function checkZeroBalanceAchievement(
 
 /**
  * Get user's total trade count
- * Counts UNIQUE ORDERS that resulted in trades (not individual trade records)
- * This ensures 1 order = 1 trade counted, even if it matches multiple orders
+ * Counts UNIQUE ORDERS that the user placed and got filled (taker side only)
+ * This ensures 1 order placed = 1 trade counted
+ * 
+ * We only count taker orders because:
+ * - Placing an order = being a taker
+ * - If we counted both taker and maker, self-trades would count as 2
  */
 async function getUserTradeCount(address: string): Promise<number> {
   const normalizedAddress = address.toLowerCase();
   
-  // Use aggregation to count distinct order IDs for both taker and maker sides
+  // Count distinct taker orders (orders the user placed that got filled)
   const result = await Trade.aggregate([
     {
-      $facet: {
-        // Count distinct taker orders (orders the user placed that got filled)
-        takerOrders: [
-          {
-            $match: {
-              takerAddress: normalizedAddress,
-              takerIsSynthetic: false,
-            },
-          },
-          {
-            $group: {
-              _id: "$takerOrderId",
-            },
-          },
-          {
-            $count: "count",
-          },
-        ],
-        // Count distinct maker orders (orders the user placed that got matched)
-        makerOrders: [
-          {
-            $match: {
-              makerAddress: normalizedAddress,
-              makerIsSynthetic: false,
-            },
-          },
-          {
-            $group: {
-              _id: "$makerOrderId",
-            },
-          },
-          {
-            $count: "count",
-          },
-        ],
+      $match: {
+        takerAddress: normalizedAddress,
+        takerIsSynthetic: false,
       },
+    },
+    {
+      $group: {
+        _id: "$takerOrderId",
+      },
+    },
+    {
+      $count: "count",
     },
   ]);
   
-  const takerCount = result[0]?.takerOrders[0]?.count || 0;
-  const makerCount = result[0]?.makerOrders[0]?.count || 0;
+  const count = result[0]?.count || 0;
   
-  console.log(`📊 Trade count for ${normalizedAddress}: ${takerCount} taker orders + ${makerCount} maker orders = ${takerCount + makerCount} total`);
+  console.log(`📊 Trade count for ${normalizedAddress}: ${count} orders filled`);
   
-  return takerCount + makerCount;
+  return count;
 }
 
 /**

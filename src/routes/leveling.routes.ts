@@ -207,6 +207,13 @@ router.post("/talents/allocate", authMiddleware, async (req, res: Response) => {
       success: true,
       message: `Point allocated to ${TALENT_CONFIG[talentId as TalentId].name}`,
       talentTree,
+      newAchievements: result.newAchievements?.map((a) => ({
+        id: a.achievement.id,
+        name: a.achievement.name,
+        description: a.achievement.description,
+        icon: a.achievement.icon,
+        points: a.achievement.points,
+      })),
     });
   } catch (error) {
     console.error("Error allocating talent point:", error);
