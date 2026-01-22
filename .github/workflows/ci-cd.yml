@@ -1,0 +1,135 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build-check:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build project
+        run: yarn build
+
+      - name: Verify build artifacts
+        run: |
+          if [ ! -f "dist/index.js" ]; then
+            echo "Build verification failed: dist/index.js not found"
+            exit 1
+          fi
+          echo "Build verification successful"
+
+  deploy:
+    name: Deploy to Production
+    needs: [build-check]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    environment:
+      name: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build project
+        run: yarn build
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy-package
+          cp -r dist deploy-package/
+          cp package.json deploy-package/
+          cp yarn.lock deploy-package/
+          cp .env.example deploy-package/.env.example 2>/dev/null || true
+          tar -czf deploy.tar.gz -C deploy-package .
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          # Create deployment directory if it doesn't exist
+          ssh ${DEPLOY_USER}@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH}"
+          
+          # Copy deployment package
+          scp deploy.tar.gz ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/
+          
+          # Extract and deploy on server
+          ssh ${DEPLOY_USER}@${DEPLOY_HOST} bash << EOF
+            set -e
+            # Source nvm
+            export NVM_DIR="\$HOME/.nvm"
+            [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
+            nvm use default || nvm use 20
+            
+            cd ${DEPLOY_PATH}
+            
+            # Backup current deployment
+            if [ -d "current" ]; then
+              # Preserve .env file before backup
+              if [ -f "current/.env" ]; then
+                cp current/.env .env.backup
+              fi
+              mv current "backup-\$(date +%Y%m%d-%H%M%S)"
+            fi
+            
+            # Extract new deployment
+            mkdir -p current
+            tar -xzf deploy.tar.gz -C current
+            rm deploy.tar.gz
+            
+            # Restore .env file (from backup or parent directory)
+            if [ -f ".env.backup" ]; then
+              cp .env.backup current/.env
+              rm .env.backup
+            elif [ -f ".env" ]; then
+              cp .env current/.env
+            fi
+            
+            # Install production dependencies
+            cd current
+            yarn install --production --frozen-lockfile
+            
+            # Restart application with PM2
+            pm2 delete ls-demo-be || true
+            pm2 start dist/index.js --name ls-demo-be --cwd ${DEPLOY_PATH}/current --update-env
+            pm2 save
+            
+            # Cleanup old backups (keep last 5)
+            cd ${DEPLOY_PATH}
+            ls -dt backup-* 2>/dev/null | tail -n +6 | xargs rm -rf || true
+            
+            echo "✅ Deployment completed successfully"
+          EOF
