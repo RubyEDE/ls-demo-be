@@ -1,9 +1,13 @@
 import { Position, IPosition } from "../models/position.model";
+import { User } from "../models/user.model";
+import { Types } from "mongoose";
 import { getCachedPrice } from "./market.service";
 import { sendPositionUpdate, PositionUpdate } from "./websocket.service";
 import { debitBalanceByAddress, creditBalanceByAddress } from "./balance.service";
-import { calculateUnrealizedPnl, wouldBeLiquidated } from "./position.service";
+import { calculateUnrealizedPnl, wouldBeLiquidated, calculateLiquidationPrice } from "./position.service";
+import { getMarket } from "./market.service";
 import { checkFirstLiquidationAchievement } from "./achievement.service";
+import { canUseLiquidationSave, useLiquidationSave } from "./talent.service";
 
 // Liquidation check interval
 let liquidationInterval: NodeJS.Timeout | null = null;
@@ -22,6 +26,105 @@ const liquidationStats: LiquidationStats = {
 };
 
 /**
+ * Try to save a position from liquidation using talent
+ * Reduces position size by 50% and recalculates liquidation price
+ */
+async function tryLiquidationSave(
+  position: IPosition,
+  currentPrice: number
+): Promise<boolean> {
+  try {
+    // Get user to find userId
+    const user = await User.findOne({ address: position.userAddress.toLowerCase() });
+    if (!user) {
+      return false;
+    }
+
+    const userId = user._id as Types.ObjectId;
+
+    // Check if user can use liquidation save
+    const canSave = await canUseLiquidationSave(userId);
+    if (!canSave) {
+      return false;
+    }
+
+    // Use the save
+    const saveResult = await useLiquidationSave(userId);
+    if (!saveResult.success) {
+      return false;
+    }
+
+    // Get market for maintenance margin rate
+    const market = await getMarket(position.marketSymbol);
+    if (!market) {
+      console.error(`Market not found for position ${position.positionId}`);
+      return false;
+    }
+
+    // Reduce position size by 50%
+    const oldSize = position.size;
+    const newSize = oldSize * 0.5;
+    const reducedSize = oldSize - newSize;
+
+    // Calculate loss for the reduced portion
+    const unrealizedPnlPerUnit = calculateUnrealizedPnl(position, currentPrice) / oldSize;
+    const lossFromReduction = unrealizedPnlPerUnit * reducedSize;
+
+    // Reduce margin proportionally
+    const oldMargin = position.margin;
+    const newMargin = oldMargin * 0.5;
+
+    // Update position
+    position.size = newSize;
+    position.margin = newMargin;
+    position.realizedPnl += lossFromReduction;
+    position.lastUpdatedAt = new Date();
+
+    // Recalculate liquidation price with new size and margin
+    position.liquidationPrice = calculateLiquidationPrice(
+      position.side,
+      position.entryPrice,
+      newMargin,
+      newSize,
+      market.maintenanceMarginRate
+    );
+
+    await position.save();
+
+    // Broadcast position update
+    const update: PositionUpdate = {
+      positionId: position.positionId,
+      marketSymbol: position.marketSymbol,
+      side: position.side,
+      size: newSize,
+      entryPrice: position.entryPrice,
+      markPrice: currentPrice,
+      margin: newMargin,
+      leverage: position.leverage,
+      unrealizedPnl: calculateUnrealizedPnl(position, currentPrice),
+      realizedPnl: position.realizedPnl,
+      liquidationPrice: position.liquidationPrice,
+      status: "open",
+      timestamp: Date.now(),
+    };
+
+    sendPositionUpdate(position.userAddress, update);
+
+    console.log(
+      `🛡️ LIQUIDATION SAVED: ${position.side.toUpperCase()} ${position.marketSymbol} ` +
+      `| User: ${position.userAddress.slice(0, 10)}... | ` +
+      `Size reduced ${oldSize.toFixed(4)} → ${newSize.toFixed(4)} | ` +
+      `New liq price: $${position.liquidationPrice.toFixed(2)}`
+    );
+
+    return true;
+  } catch (error) {
+    console.error(`Failed to save position from liquidation:`, error);
+    return false;
+  }
+}
+
+/**
  * Execute liquidation for a single position
  * When liquidated:
  * - Position is closed at the liquidation price
@@ -33,6 +136,13 @@ async function executePositionLiquidation(
   currentPrice: number
 ): Promise<boolean> {
   try {
+    // First, try to use liquidation save talent
+    const saved = await tryLiquidationSave(position, currentPrice);
+    if (saved) {
+      // Position was saved, don't liquidate
+      return false;
+    }
+
     // Calculate the loss at liquidation
     // At liquidation, the unrealized PnL equals approximately -(margin - maintenanceMargin)
     const unrealizedPnl = calculateUnrealizedPnl(position, currentPrice);

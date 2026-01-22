@@ -25,6 +25,7 @@ import {
   AchievementUnlockResult 
 } from "./achievement.service";
 import { awardTradeXP } from "./leveling.service";
+import { getEffectiveMaxLeverageByAddress } from "./talent.service";
 
 // Default prices for markets when oracle is unavailable (fallback)
 const DEFAULT_PRICES: Record<string, number> = {
@@ -116,10 +117,13 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     return { success: false, error: "Market is not active" };
   }
   
-  // Validate and set leverage (default to max leverage if not specified)
+  // Get user's effective max leverage (base + talent bonus)
+  const effectiveMaxLeverage = await getEffectiveMaxLeverageByAddress(userAddress, market.maxLeverage);
+  
+  // Validate and set leverage (default to market's base max leverage if not specified)
   const leverage = requestedLeverage ?? market.maxLeverage;
-  if (leverage < 1 || leverage > market.maxLeverage) {
-    return { success: false, error: `Leverage must be between 1 and ${market.maxLeverage}` };
+  if (leverage < 1 || leverage > effectiveMaxLeverage) {
+    return { success: false, error: `Leverage must be between 1 and ${effectiveMaxLeverage}x (${market.maxLeverage}x base + ${effectiveMaxLeverage - market.maxLeverage}x talent bonus)` };
   }
   
   // Validate quantity (must be positive)
@@ -172,27 +176,32 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
   const notionalValue = orderPrice * roundedQuantity;
   const requiredMargin = notionalValue / leverage;
   
-  // Lock balance for the order
-  const lockResult = await lockBalanceByAddress(
-    userAddress,
-    requiredMargin,
-    `Order margin for ${marketSymbol}`,
-    `ORDER-${uuidv4()}`
-  );
+  // Generate order ID upfront so we can use it for both the lock reference and order
+  const orderId = `ORD-${uuidv4()}`;
   
-  if (!lockResult.success) {
-    // Get current balance to show helpful error
-    const balance = await getBalanceByAddress(userAddress);
-    const available = balance?.free ?? 0;
-    return { 
-      success: false, 
-      error: `Insufficient balance. Required: $${requiredMargin.toFixed(2)}, Available: $${available.toFixed(2)}` 
-    };
+  // Lock balance for the order (skip for reduceOnly - closing positions releases margin, doesn't require it)
+  if (!reduceOnly) {
+    const lockResult = await lockBalanceByAddress(
+      userAddress,
+      requiredMargin,
+      `Order margin for ${marketSymbol}`,
+      orderId  // Use the same ID for traceability
+    );
+    
+    if (!lockResult.success) {
+      // Get current balance to show helpful error
+      const balance = await getBalanceByAddress(userAddress);
+      const available = balance?.free ?? 0;
+      return { 
+        success: false, 
+        error: `Insufficient balance. Required: $${requiredMargin.toFixed(2)}, Available: $${available.toFixed(2)}` 
+      };
+    }
   }
   
   // Create the order
   const order = new Order({
-    orderId: `ORD-${uuidv4()}`,
+    orderId,
     marketSymbol: market.symbol,
     userId: null, // We use address for now
     userAddress: userAddress.toLowerCase(),
@@ -210,13 +219,28 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     status: "pending",
   });
   
-  // Try to match the order
-  const { trades, remainingOrder } = await matchOrder(order);
+  // Try to match the order - wrapped in try/catch to ensure margin is unlocked on failure
+  let trades: ITrade[];
+  let remainingOrder: IOrder;
+  try {
+    const matchResult = await matchOrder(order);
+    trades = matchResult.trades;
+    remainingOrder = matchResult.remainingOrder;
+  } catch (error) {
+    // Unlock margin on matching failure (only if we locked it)
+    if (!reduceOnly) {
+      await unlockBalanceByAddress(userAddress, requiredMargin, `Order matching failed: ${orderId}`);
+    }
+    console.error(`❌ Order matching failed for ${orderId}:`, error);
+    return { success: false, error: "Order matching failed. Please try again." };
+  }
   
   // If post-only and would have matched, cancel
   if (postOnly && trades.length > 0) {
-    // Unlock the margin
-    await unlockBalanceByAddress(userAddress, requiredMargin, "Post-only order would have matched");
+    // Unlock the margin (only if we locked it - reduceOnly orders don't lock margin)
+    if (!reduceOnly) {
+      await unlockBalanceByAddress(userAddress, requiredMargin, "Post-only order would have matched");
+    }
     return { success: false, error: "Post-only order would have matched immediately" };
   }
   
@@ -230,8 +254,19 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     remainingOrder.status = "open";
   }
   
-  // Save order
-  await remainingOrder.save();
+  // Save order - also wrapped in try/catch
+  try {
+    await remainingOrder.save();
+  } catch (error) {
+    // Unlock margin on save failure (only if we locked it and order wasn't filled)
+    // For filled orders, the margin is now part of position, so don't unlock
+    if (!reduceOnly && remainingOrder.remainingQuantity > 0) {
+      const remainingMargin = (remainingOrder.price * remainingOrder.remainingQuantity) / leverage;
+      await unlockBalanceByAddress(userAddress, remainingMargin, `Order save failed: ${orderId}`);
+    }
+    console.error(`❌ Order save failed for ${orderId}:`, error);
+    return { success: false, error: "Order could not be saved. Please try again." };
+  }
   
   // Add remaining quantity to order book if limit order
   if (type === "limit" && remainingOrder.remainingQuantity > 0) {
@@ -508,9 +543,11 @@ export async function cancelOrder(orderId: string, userAddress: string): Promise
   order.cancelledAt = new Date();
   await order.save();
   
-  // Unlock margin based on order's leverage
-  const unlockedMargin = (order.price * order.remainingQuantity) / order.leverage;
-  await unlockBalanceByAddress(userAddress, unlockedMargin, `Cancelled order ${orderId}`);
+  // Unlock margin based on order's leverage (only if order locked margin - reduceOnly orders don't)
+  if (!order.reduceOnly) {
+    const unlockedMargin = (order.price * order.remainingQuantity) / order.leverage;
+    await unlockBalanceByAddress(userAddress, unlockedMargin, `Cancelled order ${orderId}`);
+  }
   
   // Notify user
   sendOrderUpdate(userAddress, "order:cancelled", {

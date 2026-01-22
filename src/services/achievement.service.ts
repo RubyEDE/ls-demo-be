@@ -3,6 +3,7 @@ import { Achievement, IAchievement } from "../models/achievement.model";
 import { UserAchievement, IUserAchievement } from "../models/user-achievement.model";
 import { User } from "../models/user.model";
 import { Trade } from "../models/trade.model";
+import { sendXPGained, sendLevelUp } from "./websocket.service";
 
 // Achievement definition interface for seeding
 interface AchievementDefinition {
@@ -583,6 +584,86 @@ export async function unlockAchievement(
   
   console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
   
+  // Award XP equal to achievement points - use atomic $inc to avoid race conditions
+  if (achievement.points > 0) {
+    try {
+      const normalizedAddress = address.toLowerCase();
+      const xpAmount = achievement.points;
+      
+      // Atomic increment of experience
+      const updatedUser = await User.findOneAndUpdate(
+        { address: normalizedAddress },
+        { 
+          $inc: { 
+            experience: xpAmount, 
+            totalExperience: xpAmount 
+          } 
+        },
+        { new: true }
+      );
+      
+      if (updatedUser) {
+        const previousLevel = updatedUser.level ?? 1;
+        let currentLevel = previousLevel;
+        let currentExp = updatedUser.experience ?? 0;
+        let levelsGained = 0;
+        
+        // Check for level ups (XP formula: 100 * level^1.5)
+        const MAX_LEVEL = 100;
+        while (currentLevel < MAX_LEVEL) {
+          const xpNeeded = Math.floor(100 * Math.pow(currentLevel, 1.5));
+          if (currentExp >= xpNeeded) {
+            currentExp -= xpNeeded;
+            currentLevel++;
+            levelsGained++;
+          } else {
+            break;
+          }
+        }
+        
+        // If leveled up, update level and remaining experience atomically
+        if (levelsGained > 0) {
+          await User.updateOne(
+            { address: normalizedAddress },
+            { $set: { level: currentLevel, experience: currentExp } }
+          );
+        }
+        
+        const experienceForNextLevel = Math.floor(100 * Math.pow(currentLevel, 1.5));
+        const progressPercentage = Math.min(100, Math.round((currentExp / experienceForNextLevel) * 100));
+        
+        console.log(`✨ ${address} gained ${xpAmount} XP (achievement: ${achievement.name})`);
+        
+        // Send WebSocket events
+        sendXPGained(normalizedAddress, {
+          amount: xpAmount,
+          reason: `achievement: ${achievement.name}`,
+          currentExperience: currentExp,
+          totalExperience: updatedUser.totalExperience ?? 0,
+          level: currentLevel,
+          experienceForNextLevel,
+          progressPercentage,
+          timestamp: Date.now(),
+        });
+        
+        if (levelsGained > 0) {
+          console.log(`⬆️ ${address} leveled up! Level ${previousLevel} → ${currentLevel}`);
+          sendLevelUp(normalizedAddress, {
+            previousLevel,
+            newLevel: currentLevel,
+            levelsGained,
+            currentExperience: currentExp,
+            totalExperience: updatedUser.totalExperience ?? 0,
+            experienceForNextLevel,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`❌ Error awarding XP for achievement ${achievementId}:`, err);
+    }
+  }
+  
   return {
     achievement,
     isNew: true,
@@ -712,40 +793,15 @@ export async function checkFirstOrderAchievement(
       return null;
     }
     
-    // Check if user already has this achievement (check by userId for consistency)
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_order",
-    });
+    // Use unlockAchievement which handles XP award
+    const result = await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_order",
+      1
+    );
     
-    if (existing) {
-      console.log(`🏆 First order achievement already unlocked for ${address}`);
-      return null; // Already has achievement
-    }
-    
-    // Get the achievement
-    const achievement = await getAchievementById("first_order");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_order' not found in database. Did you restart the server?`);
-      return null;
-    }
-    
-    // Create user achievement with the actual userId
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_order",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return result;
   } catch (error) {
     console.error(`❌ Error checking first order achievement:`, error);
     return null;
@@ -763,47 +819,18 @@ export async function checkFirstMarketOrderAchievement(
   try {
     const normalizedAddress = address.toLowerCase();
     
-    // Get the user to get their userId
     const user = await User.findOne({ address: normalizedAddress });
     if (!user) {
       console.warn(`⚠️ User not found for address ${address}`);
       return null;
     }
     
-    // Check if user already has this achievement
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_market_order",
-    });
-    
-    if (existing) {
-      console.log(`🏆 First market order achievement already unlocked for ${address}`);
-      return null;
-    }
-    
-    // Get the achievement
-    const achievement = await getAchievementById("first_market_order");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_market_order' not found in database. Did you restart the server?`);
-      return null;
-    }
-    
-    // Create user achievement
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_market_order",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_market_order",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking first market order achievement:`, error);
     return null;
@@ -821,47 +848,18 @@ export async function checkFirstLimitOrderAchievement(
   try {
     const normalizedAddress = address.toLowerCase();
     
-    // Get the user to get their userId
     const user = await User.findOne({ address: normalizedAddress });
     if (!user) {
       console.warn(`⚠️ User not found for address ${address}`);
       return null;
     }
     
-    // Check if user already has this achievement
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_limit_order",
-    });
-    
-    if (existing) {
-      console.log(`🏆 First limit order achievement already unlocked for ${address}`);
-      return null;
-    }
-    
-    // Get the achievement
-    const achievement = await getAchievementById("first_limit_order");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_limit_order' not found in database. Did you restart the server?`);
-      return null;
-    }
-    
-    // Create user achievement
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_limit_order",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_limit_order",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking first limit order achievement:`, error);
     return null;
@@ -879,47 +877,18 @@ export async function checkFirstLiquidationAchievement(
   try {
     const normalizedAddress = address.toLowerCase();
     
-    // Get the user to get their userId
     const user = await User.findOne({ address: normalizedAddress });
     if (!user) {
       console.warn(`⚠️ User not found for address ${address}`);
       return null;
     }
     
-    // Check if user already has this achievement
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_liquidation",
-    });
-    
-    if (existing) {
-      console.log(`🏆 First liquidation achievement already unlocked for ${address}`);
-      return null;
-    }
-    
-    // Get the achievement
-    const achievement = await getAchievementById("first_liquidation");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_liquidation' not found in database. Did you restart the server?`);
-      return null;
-    }
-    
-    // Create user achievement
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_liquidation",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address}`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_liquidation",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking first liquidation achievement:`, error);
     return null;
@@ -935,7 +904,6 @@ export async function checkHighLeverageAchievement(
   address: string,
   leverage: number
 ): Promise<AchievementUnlockResult | null> {
-  // Only award if leverage is 10x or higher
   if (leverage < 10) {
     return null;
   }
@@ -943,47 +911,18 @@ export async function checkHighLeverageAchievement(
   try {
     const normalizedAddress = address.toLowerCase();
     
-    // Get the user to get their userId
     const user = await User.findOne({ address: normalizedAddress });
     if (!user) {
       console.warn(`⚠️ User not found for address ${address}`);
       return null;
     }
     
-    // Check if user already has this achievement
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "high_leverage_trade",
-    });
-    
-    if (existing) {
-      console.log(`🏆 High leverage achievement already unlocked for ${address}`);
-      return null;
-    }
-    
-    // Get the achievement
-    const achievement = await getAchievementById("high_leverage_trade");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'high_leverage_trade' not found in database. Did you restart the server?`);
-      return null;
-    }
-    
-    // Create user achievement
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "high_leverage_trade",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (${leverage.toFixed(1)}x leverage)`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "high_leverage_trade",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking high leverage achievement:`, error);
     return null;
@@ -998,7 +937,6 @@ export async function checkFirstProfitableCloseAchievement(
   address: string,
   realizedPnl: number
 ): Promise<AchievementUnlockResult | null> {
-  // Only award if profitable
   if (realizedPnl <= 0) {
     return null;
   }
@@ -1012,36 +950,12 @@ export async function checkFirstProfitableCloseAchievement(
       return null;
     }
     
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_profitable_close",
-    });
-    
-    if (existing) {
-      return null;
-    }
-    
-    const achievement = await getAchievementById("first_profitable_close");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_profitable_close' not found in database`);
-      return null;
-    }
-    
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_profitable_close",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (+$${realizedPnl.toFixed(2)} profit)`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_profitable_close",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking first profitable close achievement:`, error);
     return null;
@@ -1056,7 +970,6 @@ export async function checkFirstLosingCloseAchievement(
   address: string,
   realizedPnl: number
 ): Promise<AchievementUnlockResult | null> {
-  // Only award if losing
   if (realizedPnl >= 0) {
     return null;
   }
@@ -1070,36 +983,12 @@ export async function checkFirstLosingCloseAchievement(
       return null;
     }
     
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "first_losing_close",
-    });
-    
-    if (existing) {
-      return null;
-    }
-    
-    const achievement = await getAchievementById("first_losing_close");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'first_losing_close' not found in database`);
-      return null;
-    }
-    
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "first_losing_close",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (-$${Math.abs(realizedPnl).toFixed(2)} loss)`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "first_losing_close",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking first losing close achievement:`, error);
     return null;
@@ -1115,7 +1004,6 @@ export async function checkZeroBalanceAchievement(
   free: number,
   locked: number
 ): Promise<AchievementUnlockResult | null> {
-  // Only award if both free and locked are 0
   if (free !== 0 || locked !== 0) {
     return null;
   }
@@ -1129,36 +1017,12 @@ export async function checkZeroBalanceAchievement(
       return null;
     }
     
-    const existing = await UserAchievement.findOne({
-      userId: user._id,
-      achievementId: "zero_balance",
-    });
-    
-    if (existing) {
-      return null;
-    }
-    
-    const achievement = await getAchievementById("zero_balance");
-    if (!achievement) {
-      console.warn(`⚠️ Achievement 'zero_balance' not found in database`);
-      return null;
-    }
-    
-    const userAchievement = await UserAchievement.create({
-      userId: user._id,
-      address: normalizedAddress,
-      achievementId: "zero_balance",
-      unlockedAt: new Date(),
-      currentProgress: 1,
-    });
-    
-    console.log(`🏆 Achievement unlocked: ${achievement.name} for ${address} (balance hit zero)`);
-    
-    return {
-      achievement,
-      isNew: true,
-      userAchievement,
-    };
+    return await unlockAchievement(
+      user._id as Types.ObjectId,
+      normalizedAddress,
+      "zero_balance",
+      1
+    );
   } catch (error) {
     console.error(`❌ Error checking zero balance achievement:`, error);
     return null;
@@ -1167,19 +1031,60 @@ export async function checkZeroBalanceAchievement(
 
 /**
  * Get user's total trade count
- * Counts trades where the user is either maker or taker (non-synthetic)
+ * Counts UNIQUE ORDERS that resulted in trades (not individual trade records)
+ * This ensures 1 order = 1 trade counted, even if it matches multiple orders
  */
 async function getUserTradeCount(address: string): Promise<number> {
   const normalizedAddress = address.toLowerCase();
   
-  const count = await Trade.countDocuments({
-    $or: [
-      { makerAddress: normalizedAddress, makerIsSynthetic: false },
-      { takerAddress: normalizedAddress, takerIsSynthetic: false },
-    ],
-  });
+  // Use aggregation to count distinct order IDs for both taker and maker sides
+  const result = await Trade.aggregate([
+    {
+      $facet: {
+        // Count distinct taker orders (orders the user placed that got filled)
+        takerOrders: [
+          {
+            $match: {
+              takerAddress: normalizedAddress,
+              takerIsSynthetic: false,
+            },
+          },
+          {
+            $group: {
+              _id: "$takerOrderId",
+            },
+          },
+          {
+            $count: "count",
+          },
+        ],
+        // Count distinct maker orders (orders the user placed that got matched)
+        makerOrders: [
+          {
+            $match: {
+              makerAddress: normalizedAddress,
+              makerIsSynthetic: false,
+            },
+          },
+          {
+            $group: {
+              _id: "$makerOrderId",
+            },
+          },
+          {
+            $count: "count",
+          },
+        ],
+      },
+    },
+  ]);
   
-  return count;
+  const takerCount = result[0]?.takerOrders[0]?.count || 0;
+  const makerCount = result[0]?.makerOrders[0]?.count || 0;
+  
+  console.log(`📊 Trade count for ${normalizedAddress}: ${takerCount} taker orders + ${makerCount} maker orders = ${takerCount + makerCount} total`);
+  
+  return takerCount + makerCount;
 }
 
 /**

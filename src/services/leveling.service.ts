@@ -120,9 +120,10 @@ export async function getUserLevelInfo(address: string): Promise<LevelInfo | nul
     return null;
   }
   
-  const level = user.level;
-  const experience = user.experience;
-  const totalExperience = user.totalExperience;
+  // Handle users created before leveling system (defaults)
+  const level = user.level ?? 1;
+  const experience = user.experience ?? 0;
+  const totalExperience = user.totalExperience ?? 0;
   const experienceForNextLevel = getExperienceToNextLevel(level);
   const isMaxLevel = level >= MAX_LEVEL;
   
@@ -152,6 +153,7 @@ export async function getUserLevelInfoById(userId: Types.ObjectId): Promise<Leve
 
 /**
  * Add experience to a user and handle level ups
+ * Uses atomic $inc to avoid race conditions
  */
 export async function addExperience(
   address: string,
@@ -163,28 +165,36 @@ export async function addExperience(
   }
   
   const normalizedAddress = address.toLowerCase();
-  const user = await User.findOne({ address: normalizedAddress });
+  
+  // Atomic increment of experience
+  const user = await User.findOneAndUpdate(
+    { address: normalizedAddress },
+    { 
+      $inc: { 
+        experience: amount, 
+        totalExperience: amount 
+      } 
+    },
+    { new: true }
+  );
   
   if (!user) {
     console.warn(`⚠️ Cannot add XP: User not found for address ${address}`);
     return null;
   }
   
-  const previousLevel = user.level;
-  const previousExperience = user.experience;
-  const previousTotalExperience = user.totalExperience;
-  
-  // Add experience
-  user.totalExperience += amount;
-  user.experience += amount;
+  const previousLevel = user.level ?? 1;
+  const previousExperience = (user.experience ?? 0) - amount; // Calculate what it was before
+  let currentLevel = previousLevel;
+  let currentExp = user.experience ?? 0;
   
   // Check for level ups
   let levelsGained = 0;
-  while (user.level < MAX_LEVEL) {
-    const xpNeeded = getExperienceToNextLevel(user.level);
-    if (user.experience >= xpNeeded) {
-      user.experience -= xpNeeded;
-      user.level++;
+  while (currentLevel < MAX_LEVEL) {
+    const xpNeeded = getExperienceToNextLevel(currentLevel);
+    if (currentExp >= xpNeeded) {
+      currentExp -= xpNeeded;
+      currentLevel++;
       levelsGained++;
     } else {
       break;
@@ -192,32 +202,38 @@ export async function addExperience(
   }
   
   // Cap experience at max level
-  if (user.level >= MAX_LEVEL) {
-    user.experience = 0;
+  if (currentLevel >= MAX_LEVEL) {
+    currentExp = 0;
   }
   
-  await user.save();
+  // If leveled up, update level and remaining experience atomically
+  if (levelsGained > 0 || currentLevel >= MAX_LEVEL) {
+    await User.updateOne(
+      { address: normalizedAddress },
+      { $set: { level: currentLevel, experience: currentExp } }
+    );
+  }
   
   // Log the XP gain
   const reasonStr = reason ? ` (${reason})` : "";
   if (levelsGained > 0) {
-    console.log(`⬆️ ${address} gained ${amount} XP${reasonStr} and leveled up! Level ${previousLevel} → ${user.level}`);
+    console.log(`⬆️ ${address} gained ${amount} XP${reasonStr} and leveled up! Level ${previousLevel} → ${currentLevel}`);
   } else {
     console.log(`✨ ${address} gained ${amount} XP${reasonStr}`);
   }
   
-  const experienceForNextLevel = getExperienceToNextLevel(user.level);
-  const progressPercentage = user.level >= MAX_LEVEL 
+  const experienceForNextLevel = getExperienceToNextLevel(currentLevel);
+  const progressPercentage = currentLevel >= MAX_LEVEL 
     ? 100 
-    : Math.min(100, Math.round((user.experience / experienceForNextLevel) * 100));
+    : Math.min(100, Math.round((currentExp / experienceForNextLevel) * 100));
   
   // Broadcast XP gained via WebSocket
   const xpEvent: XPGainedEvent = {
     amount,
     reason: reason || "unknown",
-    currentExperience: user.experience,
-    totalExperience: user.totalExperience,
-    level: user.level,
+    currentExperience: currentExp,
+    totalExperience: user.totalExperience ?? 0,
+    level: currentLevel,
     experienceForNextLevel,
     progressPercentage,
     timestamp: Date.now(),
@@ -228,10 +244,10 @@ export async function addExperience(
   if (levelsGained > 0) {
     const levelUpEvent: LevelUpEvent = {
       previousLevel,
-      newLevel: user.level,
+      newLevel: currentLevel,
       levelsGained,
-      currentExperience: user.experience,
-      totalExperience: user.totalExperience,
+      currentExperience: currentExp,
+      totalExperience: user.totalExperience ?? 0,
       experienceForNextLevel,
       timestamp: Date.now(),
     };
@@ -241,19 +257,19 @@ export async function addExperience(
   const levelUp: LevelUpResult | null = levelsGained > 0
     ? {
         previousLevel,
-        newLevel: user.level,
+        newLevel: currentLevel,
         levelsGained,
         experienceGained: amount,
-        currentExperience: user.experience,
-        totalExperience: user.totalExperience,
+        currentExperience: currentExp,
+        totalExperience: user.totalExperience ?? 0,
       }
     : null;
   
   return {
     experienceGained: amount,
     previousExperience,
-    currentExperience: user.experience,
-    totalExperience: user.totalExperience,
+    currentExperience: currentExp,
+    totalExperience: user.totalExperience ?? 0,
     levelUp,
   };
 }

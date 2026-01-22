@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { authMiddleware } from "../middleware/auth.middleware";
 import { AuthenticatedRequest } from "../types";
-import { getActiveMarkets, getMarket, getCachedPrice } from "../services/market.service";
+import { getActiveMarkets, getMarket, getCachedPrice, getMarketPriceWithFallback } from "../services/market.service";
 import { getOrderBookSnapshot, getSpread } from "../services/orderbook.service";
 import { getSyntheticOrderCount } from "../services/light-market-maker.service";
 import { 
@@ -40,7 +40,8 @@ router.get("/markets", async (_req: Request, res: Response) => {
     
     // Add current prices and spread info
     const marketsWithPrices = markets.map((market) => {
-      const price = getCachedPrice(market.symbol);
+      // Use fallback to get price from cache or database
+      const price = getMarketPriceWithFallback(market.symbol, market);
       const spread = getSpread(market.symbol);
       
       return {
@@ -49,6 +50,7 @@ router.get("/markets", async (_req: Request, res: Response) => {
         baseAsset: market.baseAsset,
         quoteAsset: market.quoteAsset,
         oraclePrice: price,
+        indexPrice: price, // Index price is the same as oracle price (spot reference)
         bestBid: spread.bid,
         bestAsk: spread.ask,
         spread: spread.spread,
@@ -82,7 +84,8 @@ router.get("/markets/:symbol", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "NOT_FOUND", message: "Market not found" });
     }
     
-    const price = getCachedPrice(market.symbol);
+    // Use fallback to get price from cache or database
+    const price = getMarketPriceWithFallback(market.symbol, market);
     const spread = getSpread(market.symbol);
     const syntheticOrders = await getSyntheticOrderCount(market.symbol);
     
@@ -92,6 +95,7 @@ router.get("/markets/:symbol", async (req: Request, res: Response) => {
       baseAsset: market.baseAsset,
       quoteAsset: market.quoteAsset,
       oraclePrice: price,
+      indexPrice: price, // Index price is the same as oracle price (spot reference)
       oraclePriceUpdatedAt: market.oraclePriceUpdatedAt,
       bestBid: spread.bid,
       bestAsk: spread.ask,
@@ -583,8 +587,11 @@ router.post("/positions/:marketSymbol/close", authMiddleware, async (req: Reques
       return res.status(404).json({ error: "NOT_FOUND", message: "No open position in this market" });
     }
     
-    // Get current price for market close
-    const currentPrice = getCachedPrice(marketSymbol);
+    // Get market for price fallback
+    const market = await getMarket(marketSymbol);
+    
+    // Get current price for market close (with database fallback)
+    const currentPrice = getMarketPriceWithFallback(marketSymbol, market);
     if (!currentPrice) {
       return res.status(400).json({ error: "NO_PRICE", message: "No price available for market" });
     }

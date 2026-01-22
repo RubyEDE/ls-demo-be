@@ -1,6 +1,6 @@
 import { Market, IMarket } from "../models/market.model";
 import { Position, IPosition } from "../models/position.model";
-import { getCachedPrice } from "./market.service";
+import { getCachedPrice, getMarketPriceWithFallback } from "./market.service";
 import { getBestBid, getBestAsk } from "./orderbook.service";
 import { creditBalanceByAddress, debitBalanceByAddress } from "./balance.service";
 import { sendPositionUpdate, PositionUpdate, broadcastFundingUpdate, broadcastFundingPayment, FundingUpdate, FundingPaymentEvent } from "./websocket.service";
@@ -512,12 +512,15 @@ export async function getFundingRateInfo(marketSymbol: string): Promise<{
   const history = fundingHistory.get(marketSymbol.toUpperCase());
   const lastFunding = history?.payments[0] || null;
   
+  // Use fallback to get index price from cache or database
+  const indexPrice = getMarketPriceWithFallback(marketSymbol, market);
+  
   return {
     marketSymbol: market.symbol,
     currentFundingRate: market.fundingRate,
     predictedFundingRate: predicted.fundingRate,
     markPrice: predicted.markPrice,
-    indexPrice: predicted.indexPrice,
+    indexPrice: indexPrice, // Use fallback instead of predicted.indexPrice
     premium: predicted.premium,
     nextFundingTime: market.nextFundingTime,
     fundingInterval: market.fundingInterval,

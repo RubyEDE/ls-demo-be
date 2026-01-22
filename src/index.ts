@@ -8,6 +8,7 @@ import faucetRoutes from "./routes/faucet.routes";
 import clobRoutes from "./routes/clob.routes";
 import achievementRoutes from "./routes/achievement.routes";
 import referralRoutes from "./routes/referral.routes";
+import levelingRoutes from "./routes/leveling.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
 import { initializeMarkets } from "./services/market.service";
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
@@ -70,6 +71,7 @@ app.use("/faucet", faucetRoutes);
 app.use("/clob", clobRoutes);
 app.use("/achievements", achievementRoutes);
 app.use("/referrals", referralRoutes);
+app.use("/user", levelingRoutes);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -170,6 +172,20 @@ Available endpoints:
     GET  /referrals/referred-by     - Check who referred you (auth required)
     GET  /referrals/leaderboard     - Get referral leaderboard (public)
     GET  /referrals/global-stats    - Get global referral stats (public)
+  
+  Leveling:
+    GET  /user/level                - Get user's level info (auth required)
+    GET  /user/level/rank           - Get user's level + rank (auth required)
+    GET  /user/level/thresholds     - Get XP thresholds for all levels (public)
+    GET  /user/leaderboard/levels   - Get level leaderboard (public)
+    GET  /user/:address/level       - Get any user's level info (public)
+  
+  Talent Tree:
+    GET  /user/talents              - Get user's talent tree (auth required)
+    GET  /user/talents/config       - Get talent tree configuration (public)
+    POST /user/talents/allocate     - Allocate a talent point (auth required, body: { talentId })
+    POST /user/talents/reset        - Reset all talent points (auth required)
+    GET  /user/talents/bonuses      - Get user's active talent bonuses (auth required)
   
   Steam Oracle (CS:GO Prices):
     Prices are fetched automatically from Steam Community Market

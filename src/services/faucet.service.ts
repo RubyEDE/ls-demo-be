@@ -5,10 +5,11 @@ import { IBalance } from "../models/balance.model";
 import { checkFaucetAchievements, AchievementUnlockResult } from "./achievement.service";
 import { completeReferral, applyReferralCode } from "./referral.service";
 import { awardFaucetXP } from "./leveling.service";
+import { getFaucetBonuses, FaucetBonuses } from "./talent.service";
 
 // Faucet configuration
-const FAUCET_AMOUNT = 100; // Amount given per request
-const COOLDOWN_HOURS = 24; // Hours between requests
+const BASE_FAUCET_AMOUNT = 100; // Base amount given per request
+const BASE_COOLDOWN_HOURS = 24; // Base hours between requests
 
 export interface FaucetRequestResult {
   success: boolean;
@@ -19,6 +20,11 @@ export interface FaucetRequestResult {
   newAchievements?: AchievementUnlockResult[];
   referralCompleted?: boolean;
   referrerRewarded?: number;
+  bonusesApplied?: {
+    amountMultiplier: number;
+    cooldownMultiplier: number;
+    claimsRemaining: number;
+  };
 }
 
 export interface FaucetStats {
@@ -27,34 +33,66 @@ export interface FaucetStats {
   lastRequestAt: Date | null;
   nextRequestAt: Date | null;
   canRequest: boolean;
+  claimsRemaining: number;
+  bonuses: FaucetBonuses;
+  nextClaimAmount: number;
+  cooldownHours: number;
 }
 
 /**
- * Get the start of today (for daily limit checks)
+ * Get the cooldown period in milliseconds based on talent bonuses
  */
-function getCooldownStartTime(): Date {
+function getCooldownMs(bonuses: FaucetBonuses): number {
+  return BASE_COOLDOWN_HOURS * 60 * 60 * 1000 * bonuses.cooldownMultiplier;
+}
+
+/**
+ * Get the cooldown start time based on talent bonuses
+ */
+function getCooldownStartTime(bonuses: FaucetBonuses): Date {
   const now = new Date();
-  return new Date(now.getTime() - COOLDOWN_HOURS * 60 * 60 * 1000);
+  const cooldownMs = getCooldownMs(bonuses);
+  return new Date(now.getTime() - cooldownMs);
 }
 
 /**
  * Check if user can request from faucet
+ * Now considers talent bonuses for cooldown and multi-claim
  */
 export async function canRequestFromFaucet(
   userId: Types.ObjectId
-): Promise<{ canRequest: boolean; nextRequestAt: Date | null; lastRequest: IFaucetRequest | null }> {
-  const cooldownStart = getCooldownStartTime();
+): Promise<{ 
+  canRequest: boolean; 
+  nextRequestAt: Date | null; 
+  lastRequest: IFaucetRequest | null;
+  claimsRemaining: number;
+  bonuses: FaucetBonuses;
+}> {
+  // Get user's talent bonuses
+  const bonuses = await getFaucetBonuses(userId);
+  const cooldownMs = getCooldownMs(bonuses);
+  const cooldownStart = getCooldownStartTime(bonuses);
   
+  // Count requests within the current cooldown period
+  const requestsInPeriod = await FaucetRequest.countDocuments({
+    userId,
+    createdAt: { $gte: cooldownStart },
+  });
+  
+  // Get the last request in the cooldown period
   const lastRequest = await FaucetRequest.findOne({
     userId,
     createdAt: { $gte: cooldownStart },
   }).sort({ createdAt: -1 });
   
-  if (lastRequest) {
-    const nextRequestAt = new Date(
-      lastRequest.createdAt.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000
-    );
-    return { canRequest: false, nextRequestAt, lastRequest };
+  // Calculate claims remaining based on talent (claimsPerCooldown)
+  const claimsAllowed = bonuses.claimsPerCooldown;
+  const claimsRemaining = Math.max(0, claimsAllowed - requestsInPeriod);
+  
+  if (claimsRemaining <= 0 && lastRequest) {
+    // No claims remaining, calculate when cooldown ends
+    const nextRequestAt = new Date(lastRequest.createdAt.getTime() + cooldownMs);
+    return { canRequest: false, nextRequestAt, lastRequest, claimsRemaining: 0, bonuses };
   }
   
   // Get last request ever for stats
@@ -62,7 +100,7 @@ export async function canRequestFromFaucet(
     createdAt: -1,
   });
   
-  return { canRequest: true, nextRequestAt: null, lastRequest: lastRequestEver };
+  return { canRequest: true, nextRequestAt: null, lastRequest: lastRequestEver, claimsRemaining, bonuses };
 }
 
 /**
@@ -76,13 +114,14 @@ export async function requestFromFaucet(
   userAgent?: string,
   referralCode?: string
 ): Promise<FaucetRequestResult> {
-  const { canRequest, nextRequestAt } = await canRequestFromFaucet(userId);
+  const { canRequest, nextRequestAt, claimsRemaining, bonuses } = await canRequestFromFaucet(userId);
   
   if (!canRequest) {
+    const cooldownHours = BASE_COOLDOWN_HOURS * bonuses.cooldownMultiplier;
     return {
       success: false,
       nextRequestAt: nextRequestAt!,
-      error: `You can only request once every ${COOLDOWN_HOURS} hours`,
+      error: `You can only request ${bonuses.claimsPerCooldown} time(s) every ${cooldownHours.toFixed(1)} hours`,
     };
   }
   
@@ -104,12 +143,17 @@ export async function requestFromFaucet(
   // Ensure balance exists
   await getOrCreateBalance(userId, address);
   
+  // Calculate faucet amount with talent bonus
+  const faucetAmount = Math.floor(BASE_FAUCET_AMOUNT * bonuses.amountMultiplier);
+  
   // Credit the balance
   const creditResult = await creditBalance(
     userId,
     address,
-    FAUCET_AMOUNT,
-    "Faucet request",
+    faucetAmount,
+    bonuses.amountMultiplier > 1 
+      ? `Faucet request (${Math.round((bonuses.amountMultiplier - 1) * 100)}% talent bonus)`
+      : "Faucet request",
     `faucet_${Date.now()}`
   );
   
@@ -124,7 +168,7 @@ export async function requestFromFaucet(
   await FaucetRequest.create({
     userId,
     address: address.toLowerCase(),
-    amount: FAUCET_AMOUNT,
+    amount: faucetAmount,
     ipAddress,
     userAgent,
   });
@@ -134,8 +178,15 @@ export async function requestFromFaucet(
     console.error(`❌ Error awarding faucet XP:`, err);
   });
   
-  // Calculate next available request time
-  const newNextRequestAt = new Date(Date.now() + COOLDOWN_HOURS * 60 * 60 * 1000);
+  // Calculate next available request time based on talent cooldown reduction
+  const cooldownMs = getCooldownMs(bonuses);
+  const newClaimsRemaining = claimsRemaining - 1;
+  
+  // If user has more claims available, next request is now
+  // Otherwise, calculate based on reduced cooldown
+  const newNextRequestAt = newClaimsRemaining > 0 
+    ? new Date() // Can claim again immediately
+    : new Date(Date.now() + cooldownMs);
   
   // Get total faucet claims and check for achievements
   const totalClaims = await FaucetRequest.countDocuments({ userId });
@@ -155,14 +206,21 @@ export async function requestFromFaucet(
     }
   }
   
+  console.log(`💧 Faucet claimed by ${address}: ${faucetAmount} credits (${bonuses.amountMultiplier}x multiplier, ${newClaimsRemaining} claims remaining)`);
+  
   return {
     success: true,
-    amount: FAUCET_AMOUNT,
+    amount: faucetAmount,
     balance: creditResult.balance,
     nextRequestAt: newNextRequestAt,
     newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
     referralCompleted: referralCompleted || undefined,
     referrerRewarded: referrerRewarded || undefined,
+    bonusesApplied: {
+      amountMultiplier: bonuses.amountMultiplier,
+      cooldownMultiplier: bonuses.cooldownMultiplier,
+      claimsRemaining: newClaimsRemaining,
+    },
   };
 }
 
@@ -170,7 +228,7 @@ export async function requestFromFaucet(
  * Get faucet statistics for a user
  */
 export async function getFaucetStats(userId: Types.ObjectId): Promise<FaucetStats> {
-  const [totalRequests, totalAmountResult, { canRequest, nextRequestAt, lastRequest }] =
+  const [totalRequests, totalAmountResult, { canRequest, nextRequestAt, lastRequest, claimsRemaining, bonuses }] =
     await Promise.all([
       FaucetRequest.countDocuments({ userId }),
       FaucetRequest.aggregate([
@@ -181,6 +239,8 @@ export async function getFaucetStats(userId: Types.ObjectId): Promise<FaucetStat
     ]);
   
   const totalAmountDistributed = totalAmountResult[0]?.total || 0;
+  const nextClaimAmount = Math.floor(BASE_FAUCET_AMOUNT * bonuses.amountMultiplier);
+  const cooldownHours = BASE_COOLDOWN_HOURS * bonuses.cooldownMultiplier;
   
   return {
     totalRequests,
@@ -188,6 +248,10 @@ export async function getFaucetStats(userId: Types.ObjectId): Promise<FaucetStat
     lastRequestAt: lastRequest?.createdAt || null,
     nextRequestAt,
     canRequest,
+    claimsRemaining,
+    bonuses,
+    nextClaimAmount,
+    cooldownHours,
   };
 }
 

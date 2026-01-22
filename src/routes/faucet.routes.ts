@@ -161,6 +161,13 @@ router.post(
             referrerRewarded: result.referrerRewarded,
           }
         : undefined,
+      bonuses: result.bonusesApplied
+        ? {
+            amountMultiplier: result.bonusesApplied.amountMultiplier,
+            cooldownMultiplier: result.bonusesApplied.cooldownMultiplier,
+            claimsRemaining: result.bonusesApplied.claimsRemaining,
+          }
+        : undefined,
     });
   }
 );
@@ -195,6 +202,14 @@ router.get(
       lastRequestAt: stats.lastRequestAt?.toISOString() || null,
       nextRequestAt: stats.nextRequestAt?.toISOString() || null,
       canRequest: stats.canRequest,
+      claimsRemaining: stats.claimsRemaining,
+      nextClaimAmount: stats.nextClaimAmount,
+      cooldownHours: stats.cooldownHours,
+      bonuses: {
+        amountMultiplier: stats.bonuses.amountMultiplier,
+        cooldownMultiplier: stats.bonuses.cooldownMultiplier,
+        claimsPerCooldown: stats.bonuses.claimsPerCooldown,
+      },
     });
   }
 );

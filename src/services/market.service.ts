@@ -73,11 +73,30 @@ export async function updateOraclePrice(symbol: string, price: number): Promise<
 }
 
 /**
- * Get cached oracle price
+ * Get cached oracle price (falls back to database if cache is empty)
  */
 export function getCachedPrice(symbol: string): number | null {
   const cached = priceCache.get(symbol.toUpperCase());
   return cached?.price ?? null;
+}
+
+/**
+ * Get oracle price with database fallback
+ * Use this when you need a price and have access to the market object
+ */
+export function getMarketPriceWithFallback(symbol: string, market: IMarket | null): number | null {
+  // First try in-memory cache (most up-to-date)
+  const cached = getCachedPrice(symbol);
+  if (cached !== null) {
+    return cached;
+  }
+  
+  // Fall back to database value
+  if (market && market.oraclePrice > 0) {
+    return market.oraclePrice;
+  }
+  
+  return null;
 }
 
 /**

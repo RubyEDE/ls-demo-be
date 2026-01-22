@@ -21,6 +21,7 @@ export interface Market {
   baseAsset: string;
   quoteAsset: string;
   oraclePrice: number | null;
+  indexPrice: number | null; // Index price (same as oracle price, spot reference)
   bestBid: number | null;
   bestAsk: number | null;
   spread: number | null;

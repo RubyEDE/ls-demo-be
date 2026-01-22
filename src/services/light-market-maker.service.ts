@@ -346,6 +346,14 @@ function generateOrdersWithAccounts(
   }> = [];
 
   const halfSpreadBps = config.spreadBps / 2;
+  
+  // Calculate strict bounds to prevent crossed orderbook
+  // Best bid must be at least 1 tick below midpoint
+  // Best ask must be at least 1 tick above midpoint
+  const tickSize = 0.01;
+  const midPrice = oraclePrice;
+  const maxBidPrice = roundToTickSize(midPrice - tickSize, tickSize); // Highest allowed bid
+  const minAskPrice = roundToTickSize(midPrice + tickSize, tickSize); // Lowest allowed ask
 
   // Generate bid orders (buy side)
   for (let level = 0; level < config.numLevels; level++) {
@@ -354,9 +362,12 @@ function generateOrdersWithAccounts(
     
     // Multiple orders per level from different accounts
     for (let o = 0; o < config.ordersPerLevel; o++) {
-      // Small price variance within the level
-      const priceVariance = (Math.random() - 0.5) * oraclePrice * 0.0001;
-      const price = roundToTickSize(basePrice + priceVariance, 0.01);
+      // Small price variance within the level (only negative for bids to avoid crossing)
+      const priceVariance = -Math.random() * oraclePrice * 0.0001;
+      let price = roundToTickSize(basePrice + priceVariance, tickSize);
+      
+      // Ensure bid never crosses above max bid price
+      price = Math.min(price, maxBidPrice);
       
       // Size with variance
       const baseQty = config.baseOrderSize * Math.pow(config.sizeMultiplier, level);
@@ -380,9 +391,12 @@ function generateOrdersWithAccounts(
     
     // Multiple orders per level from different accounts
     for (let o = 0; o < config.ordersPerLevel; o++) {
-      // Small price variance within the level
-      const priceVariance = (Math.random() - 0.5) * oraclePrice * 0.0001;
-      const price = roundToTickSize(basePrice + priceVariance, 0.01);
+      // Small price variance within the level (only positive for asks to avoid crossing)
+      const priceVariance = Math.random() * oraclePrice * 0.0001;
+      let price = roundToTickSize(basePrice + priceVariance, tickSize);
+      
+      // Ensure ask never crosses below min ask price
+      price = Math.max(price, minAskPrice);
       
       // Size with variance
       const baseQty = config.baseOrderSize * Math.pow(config.sizeMultiplier, level);
