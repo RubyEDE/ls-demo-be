@@ -24,7 +24,7 @@ import {
   checkTradeCountAchievements,
   AchievementUnlockResult 
 } from "./achievement.service";
-import { awardTradeXP } from "./leveling.service";
+import { awardTradeXP, awardPositionClosedXP } from "./leveling.service";
 import { getEffectiveMaxLeverageByAddress } from "./talent.service";
 
 // Default prices for markets when oracle is unavailable (fallback)
@@ -81,6 +81,7 @@ interface PlaceOrderResult {
   success: boolean;
   order?: IOrder;
   trades?: ITrade[];
+  realizedPnl?: number;  // Total realized PnL if this order closed/reduced a position
   error?: string;
   newAchievements?: AchievementUnlockResult[];
 }
@@ -222,10 +223,12 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
   // Try to match the order - wrapped in try/catch to ensure margin is unlocked on failure
   let trades: ITrade[];
   let remainingOrder: IOrder;
+  let realizedPnl: number = 0;
   try {
     const matchResult = await matchOrder(order);
     trades = matchResult.trades;
     remainingOrder = matchResult.remainingOrder;
+    realizedPnl = matchResult.realizedPnl;
   } catch (error) {
     // Unlock margin on matching failure (only if we locked it)
     if (!reduceOnly) {
@@ -343,6 +346,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
     success: true,
     order: remainingOrder,
     trades,
+    realizedPnl: realizedPnl !== 0 ? realizedPnl : undefined,  // Only include if there was PnL
     newAchievements: newAchievements.length > 0 ? newAchievements : undefined,
   };
 }
@@ -350,7 +354,7 @@ export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderRe
 /**
  * Match an order against the book
  */
-async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingOrder: IOrder }> {
+async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingOrder: IOrder; realizedPnl: number }> {
   const trades: ITrade[] = [];
   const book = getOrCreateOrderBook(order.marketSymbol);
   
@@ -364,6 +368,7 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
   
   let filledQuantity = 0;
   let totalCost = 0;
+  let totalRealizedPnl = 0;  // Track PnL from closing positions
   
   for (const price of sortedPrices) {
     // Check if price is acceptable
@@ -459,7 +464,7 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
         // Calculate margin used for this fill based on order's leverage
         const fillMargin = (makerOrder.price * fillQty) / order.leverage;
         
-        await handleTradeExecution(
+        const positionResult = await handleTradeExecution(
           order.userAddress,
           order.marketSymbol,
           order.side,
@@ -468,6 +473,16 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
           fillMargin,
           order.reduceOnly  // Pass reduceOnly flag so position service knows if margin was locked
         );
+        
+        // Track realized PnL if this trade closed/reduced a position
+        if (positionResult.realizedPnl !== undefined) {
+          totalRealizedPnl += positionResult.realizedPnl;
+          
+          // Award XP for closing a position (more XP for profitable trades)
+          awardPositionClosedXP(order.userAddress, positionResult.realizedPnl > 0).catch(err => {
+            console.error(`❌ Error awarding position closed XP:`, err);
+          });
+        }
         
         // Award XP to taker for trade execution
         awardTradeXP(order.userAddress).catch(err => {
@@ -509,7 +524,7 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
     order.averagePrice = totalCost / filledQuantity;
   }
   
-  return { trades, remainingOrder: order };
+  return { trades, remainingOrder: order, realizedPnl: totalRealizedPnl };
 }
 
 /**

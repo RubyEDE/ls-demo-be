@@ -150,6 +150,44 @@ router.get("/orderbook/:symbol", async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /clob/trades/history
+ * Get user's trade history
+ */
+router.get("/trades/history", authMiddleware, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  
+  try {
+    const marketSymbol = req.query.market as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+    
+    const trades = await getUserTradeHistory(authReq.auth!.address, marketSymbol, limit, offset);
+    
+    res.json({
+      trades: trades.map((t) => ({
+        tradeId: t.tradeId,
+        marketSymbol: t.marketSymbol,
+        side: t.side,
+        price: t.price,
+        quantity: t.quantity,
+        quoteQuantity: t.quoteQuantity,
+        fee: t.takerAddress === authReq.auth!.address.toLowerCase() ? t.takerFee : t.makerFee,
+        isMaker: t.makerAddress === authReq.auth!.address.toLowerCase(),
+        timestamp: t.createdAt,
+      })),
+      pagination: {
+        limit,
+        offset,
+        hasMore: trades.length === limit,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching trade history:", error);
+    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch trade history" });
+  }
+});
+
+/**
  * GET /clob/trades/:symbol
  * Get recent trades for a market
  */
@@ -260,6 +298,8 @@ router.post("/orders", authMiddleware, async (req: Request, res: Response) => {
         quantity: t.quantity,
         side: t.side,
       })),
+      // Include realized PnL if the order closed/reduced a position
+      realizedPnl: result.realizedPnl,
       newAchievements: result.newAchievements?.map((a) => ({
         id: a.achievement.id,
         name: a.achievement.name,
@@ -378,44 +418,6 @@ router.get("/orders/history", authMiddleware, async (req: Request, res: Response
   } catch (error) {
     console.error("Error fetching order history:", error);
     res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch order history" });
-  }
-});
-
-/**
- * GET /clob/trades/history
- * Get user's trade history
- */
-router.get("/trades/history", authMiddleware, async (req: Request, res: Response) => {
-  const authReq = req as AuthenticatedRequest;
-  
-  try {
-    const marketSymbol = req.query.market as string | undefined;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-    const offset = parseInt(req.query.offset as string) || 0;
-    
-    const trades = await getUserTradeHistory(authReq.auth!.address, marketSymbol, limit, offset);
-    
-    res.json({
-      trades: trades.map((t) => ({
-        tradeId: t.tradeId,
-        marketSymbol: t.marketSymbol,
-        side: t.side,
-        price: t.price,
-        quantity: t.quantity,
-        quoteQuantity: t.quoteQuantity,
-        fee: t.takerAddress === authReq.auth!.address.toLowerCase() ? t.takerFee : t.makerFee,
-        isMaker: t.makerAddress === authReq.auth!.address.toLowerCase(),
-        timestamp: t.createdAt,
-      })),
-      pagination: {
-        limit,
-        offset,
-        hasMore: trades.length === limit,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching trade history:", error);
-    res.status(500).json({ error: "INTERNAL_ERROR", message: "Failed to fetch trade history" });
   }
 });
 
