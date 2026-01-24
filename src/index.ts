@@ -108,15 +108,16 @@ async function start() {
   startFundingEngine(60000);
   
   // Initialize and start the light market maker (after a delay to ensure prices are loaded)
+  // Deep liquidity config: designed to absorb large orders without significant price impact
   initLightMarketMaker({
     numAccounts: 500,          // 500 synthetic accounts
     spreadBps: 10,             // 0.1% spread (tight)
     numLevels: 50,             // 50 price levels per side
     levelSpacingBps: 3,        // 0.03% between levels
-    baseOrderSize: 0.5,        // 0.5 units base size
-    sizeMultiplier: 1.05,      // 5% more at each deeper level
-    sizeVariance: 0.3,         // 30% random variance
-    ordersPerLevel: 3,         // 3 orders per price level
+    baseOrderSize: 10,         // 10 units base size (20x increase for deep liquidity)
+    sizeMultiplier: 1.15,      // 15% more at each deeper level (steeper depth curve)
+    sizeVariance: 0.25,        // 25% random variance (slightly less for stability)
+    ordersPerLevel: 8,         // 8 orders per price level (more orders = harder to move)
     refreshIntervalMs: 1000,   // Refresh every 1 second
     enableTradeGeneration: true,
     tradeIntervalMs: 2000,     // Generate trades every 2 seconds

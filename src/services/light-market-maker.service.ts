@@ -48,17 +48,18 @@ interface MarketMakerConfig {
   enabledMarkets: string[];
 }
 
-// Default configuration - 500 accounts, 50 levels
+// Default configuration - 500 accounts, 50 levels, DEEP liquidity
+// Designed to absorb large user orders without significant price impact
 const DEFAULT_CONFIG: MarketMakerConfig = {
   numAccounts: 500,           // 500 synthetic accounts
-  spreadBps: 20,              // 0.2% spread
+  spreadBps: 10,              // 0.1% spread (tight)
   numLevels: 50,              // 50 levels per side (100 total)
-  levelSpacingBps: 5,         // 0.05% between levels
-  baseOrderSize: 0.5,         // 0.5 units base size
-  sizeMultiplier: 1.05,       // 5% more at each deeper level
-  sizeVariance: 0.3,          // 30% random variance
-  ordersPerLevel: 3,          // 3 orders per price level
-  refreshIntervalMs: 30000,   // Refresh every 30 seconds
+  levelSpacingBps: 3,         // 0.03% between levels
+  baseOrderSize: 10,          // 10 units base size (deep liquidity)
+  sizeMultiplier: 1.15,       // 15% more at each deeper level (steeper depth)
+  sizeVariance: 0.25,         // 25% random variance
+  ordersPerLevel: 8,          // 8 orders per price level (harder to move)
+  refreshIntervalMs: 1000,    // Refresh every 1 second
   enableTradeGeneration: true,
   tradeIntervalMs: 2000,      // Generate trades every 2 seconds
   minTradesPerInterval: 1,
