@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { Position, IPosition, PositionSide } from "../models/position.model";
 import { getMarket, getCachedPrice } from "./market.service";
 import { sendPositionUpdate, PositionUpdate } from "./websocket.service";
-import { lockBalanceByAddress, unlockBalanceByAddress, creditBalanceByAddress } from "./balance.service";
+import { lockBalanceByAddress, unlockBalanceByAddress, creditBalanceByAddress, debitBalanceByAddress } from "./balance.service";
 import { 
   checkHighLeverageAchievement,
   checkFirstProfitableCloseAchievement,
@@ -298,13 +298,31 @@ export async function decreasePosition(
   position.margin -= marginToRelease;
   position.lastUpdatedAt = new Date();
   
-  // Release margin + PnL to user
-  const totalReturn = marginToRelease + realizedPnl;
-  if (totalReturn > 0) {
+  // Release margin back to user (move from locked to free)
+  // Note: This margin was locked when the position was opened
+  if (marginToRelease > 0) {
+    await unlockBalanceByAddress(
+      position.userAddress,
+      marginToRelease,
+      `Released margin for ${closeSize} ${position.marketSymbol}`,
+      position.positionId
+    );
+  }
+  
+  // Handle PnL separately - credit profits, debit losses
+  if (realizedPnl > 0) {
     await creditBalanceByAddress(
       position.userAddress,
-      totalReturn,
-      `Closed ${closeSize} ${position.marketSymbol} - PnL: ${realizedPnl >= 0 ? '+' : ''}$${realizedPnl.toFixed(2)}`,
+      realizedPnl,
+      `Profit on ${closeSize} ${position.marketSymbol}: +$${realizedPnl.toFixed(2)}`,
+      position.positionId
+    );
+  } else if (realizedPnl < 0) {
+    // Debit losses from the user's balance
+    await debitBalanceByAddress(
+      position.userAddress,
+      Math.abs(realizedPnl),
+      `Loss on ${closeSize} ${position.marketSymbol}: -$${Math.abs(realizedPnl).toFixed(2)}`,
       position.positionId
     );
   }
@@ -360,6 +378,7 @@ export async function closePosition(
 
 /**
  * Handle a trade execution - update or create position
+ * @param isReduceOnly - If true, no margin was locked for this order (it's a closing order)
  */
 export async function handleTradeExecution(
   userAddress: string,
@@ -367,7 +386,8 @@ export async function handleTradeExecution(
   tradeSide: "buy" | "sell",
   tradeSize: number,
   executionPrice: number,
-  marginUsed: number
+  marginUsed: number,
+  isReduceOnly: boolean = false
 ): Promise<PositionResult> {
   const market = await getMarket(marketSymbol);
   if (!market) {
@@ -402,8 +422,12 @@ export async function handleTradeExecution(
     // Opposite direction - reduce or flip position
     if (tradeSize <= existingPosition.size) {
       // Just reducing position
-      // First unlock the margin that was locked for this order since we're closing
-      await unlockBalanceByAddress(userAddress, marginUsed, "Margin returned - closing position");
+      // Note: decreasePosition handles unlocking the position's margin
+      // If this was NOT a reduceOnly order, margin was locked for the closing order
+      // and we need to unlock it here since it's not being used for a new position.
+      if (!isReduceOnly && marginUsed > 0) {
+        await unlockBalanceByAddress(userAddress, marginUsed, "Closing order margin returned");
+      }
       return decreasePosition(existingPosition, tradeSize, executionPrice);
     } else {
       // Closing and opening opposite position

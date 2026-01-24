@@ -465,7 +465,8 @@ async function matchOrder(order: IOrder): Promise<{ trades: ITrade[]; remainingO
           order.side,
           fillQty,
           makerOrder.price,
-          fillMargin
+          fillMargin,
+          order.reduceOnly  // Pass reduceOnly flag so position service knows if margin was locked
         );
         
         // Award XP to taker for trade execution
