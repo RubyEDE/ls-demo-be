@@ -9,10 +9,13 @@ import clobRoutes from "./routes/clob.routes";
 import achievementRoutes from "./routes/achievement.routes";
 import referralRoutes from "./routes/referral.routes";
 import levelingRoutes from "./routes/leveling.routes";
+import spotRoutes from "./routes/spot.routes";
 import { initializeWebSocket, getActiveChannels } from "./services/websocket.service";
 import { initializeMarkets } from "./services/market.service";
 import { initializeCandles, getMarketStatus } from "./services/candle.service";
 import { initializeOrderBooks } from "./services/orderbook.service";
+import { initializeSpotOrderBooks } from "./services/spot-order.service";
+import { initializeSpotCandles } from "./services/spot-candle.service";
 import { initializeAchievements } from "./services/achievement.service";
 import { startLiquidationEngine } from "./services/liquidation.service";
 import { startFundingEngine, getFundingStats } from "./services/funding.service";
@@ -72,6 +75,7 @@ app.use("/clob", clobRoutes);
 app.use("/achievements", achievementRoutes);
 app.use("/referrals", referralRoutes);
 app.use("/user", levelingRoutes);
+app.use("/spot", spotRoutes);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -100,6 +104,14 @@ async function start() {
   
   // Initialize orderbooks with real user orders (no synthetic liquidity)
   await initializeOrderBooks();
+  
+  // Initialize spot orderbooks
+  await initializeSpotOrderBooks();
+  
+  // Initialize spot candles (seeds historical data)
+  await initializeSpotCandles([
+    { symbol: "UMBREON-VMAX-SPOT", targetPrice: 3400 },
+  ]);
   
   // Start liquidation engine (checks every second)
   startLiquidationEngine(1000);
@@ -220,6 +232,23 @@ Available endpoints:
     GET  /clob/funding/:symbol/history - Get funding payment history
     GET  /clob/funding/:symbol/estimate - Estimate funding for position (?side=long&size=1)
     GET  /clob/funding-stats         - Get global funding statistics
+  
+  Spot Trading:
+    GET  /spot/markets               - Get all spot markets
+    GET  /spot/markets/:symbol       - Get spot market details
+    GET  /spot/orderbook/:symbol     - Get spot order book
+    GET  /spot/trades/:symbol        - Get recent spot trades
+    GET  /spot/candles/:symbol       - Get spot candle data (?interval=1m&limit=100)
+    GET  /spot/candles/:symbol/status - Check if enough candle data exists
+    POST /spot/orders                - Place spot order (auth required)
+    DELETE /spot/orders/:orderId     - Cancel spot order (auth required)
+    GET  /spot/orders                - Get open spot orders (auth required)
+    GET  /spot/orders/history        - Get spot order history (auth required)
+    GET  /spot/trades/history        - Get spot trade history (auth required)
+    GET  /spot/balances              - Get all spot balances (auth required)
+    GET  /spot/balances/summary      - Get non-zero balances (auth required)
+    GET  /spot/balances/:asset       - Get balance for asset (auth required)
+    GET  /spot/balances/:asset/history - Get balance history (auth required)
   
   Market Maker (Admin):
     GET  /clob/market-maker/stats    - Get market maker stats & liquidity
