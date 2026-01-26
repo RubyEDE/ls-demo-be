@@ -273,11 +273,25 @@ Authorization: Bearer <token>
       "asset": "UMBREON-VMAX",
       "free": 10,
       "locked": 0,
-      "total": 10
+      "total": 10,
+      "avgCost": 3400.50,
+      "totalCostBasis": 34005.00
     }
   ]
 }
 ```
+
+**Balance Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `asset` | string | Asset symbol |
+| `free` | number | Available balance |
+| `locked` | number | Balance locked in open orders |
+| `total` | number | Total balance (free + locked) |
+| `avgCost` | number | Average cost per unit (non-USD assets only) |
+| `totalCostBasis` | number | Total cost of all purchases (non-USD assets only) |
+
+**Note:** `avgCost` and `totalCostBasis` are only provided for non-USD assets and are used for P&L calculations.
 
 ### Get Trade History
 

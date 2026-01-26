@@ -512,7 +512,8 @@ async function matchSpotOrder(order: ISpotOrder): Promise<{ trades: ISpotTrade[]
           order.side,
           fillQty,
           fillValue,
-          trade.tradeId
+          trade.tradeId,
+          makerOrder.price  // Price for avg cost tracking
         );
       }
       
@@ -525,7 +526,8 @@ async function matchSpotOrder(order: ISpotOrder): Promise<{ trades: ISpotTrade[]
           makerOrder.side,
           fillQty,
           fillValue,
-          trade.tradeId
+          trade.tradeId,
+          makerOrder.price  // Price for avg cost tracking
         );
       }
       

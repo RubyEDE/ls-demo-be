@@ -6,6 +6,7 @@ export interface ISpotBalanceChange {
   reason: string;
   timestamp: Date;
   referenceId?: string;
+  price?: number;           // Price per unit (for cost basis tracking)
 }
 
 export interface ISpotBalance extends Document {
@@ -16,6 +17,8 @@ export interface ISpotBalance extends Document {
   locked: number;           // Locked in open orders
   totalCredits: number;
   totalDebits: number;
+  totalCostBasis: number;   // Total cost of all purchases (for avg cost calc)
+  avgCost: number;          // Average cost per unit
   changes: ISpotBalanceChange[];
   createdAt: Date;
   updatedAt: Date;
@@ -42,6 +45,9 @@ const spotBalanceChangeSchema = new Schema<ISpotBalanceChange>(
     },
     referenceId: {
       type: String,
+    },
+    price: {
+      type: Number,
     },
   },
   { _id: false }
@@ -82,6 +88,14 @@ const spotBalanceSchema = new Schema<ISpotBalance>(
       default: 0,
     },
     totalDebits: {
+      type: Number,
+      default: 0,
+    },
+    totalCostBasis: {
+      type: Number,
+      default: 0,
+    },
+    avgCost: {
       type: Number,
       default: 0,
     },

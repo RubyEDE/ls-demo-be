@@ -24,6 +24,8 @@ export interface SpotBalanceSummary {
   free: number;
   locked: number;
   total: number;
+  avgCost?: number;         // Average cost per unit (for non-USD assets)
+  totalCostBasis?: number;  // Total cost basis (for non-USD assets)
 }
 
 /**
@@ -123,7 +125,7 @@ export async function getAllSpotBalancesWithUsd(
   
   const result: SpotBalanceSummary[] = [];
   
-  // Add USD from perp balance
+  // Add USD from perp balance (no avgCost for USD)
   if (perpBalance) {
     result.push({
       asset: USD_ASSET,
@@ -133,13 +135,15 @@ export async function getAllSpotBalancesWithUsd(
     });
   }
   
-  // Add non-USD assets
+  // Add non-USD assets with avgCost
   for (const balance of spotBalances) {
     result.push({
       asset: balance.asset,
       free: balance.free,
       locked: balance.locked,
       total: balance.free + balance.locked,
+      avgCost: balance.avgCost || 0,
+      totalCostBasis: balance.totalCostBasis || 0,
     });
   }
   
@@ -171,12 +175,14 @@ export async function getSpotBalanceSummary(
       free: b.free,
       locked: b.locked,
       total: b.free + b.locked,
+      avgCost: b.avgCost || 0,
+      totalCostBasis: b.totalCostBasis || 0,
     }));
   
   // Add USD from main perp balance
   const perpBalance = await getBalanceByAddress(address);
   if (perpBalance && (perpBalance.free > 0 || perpBalance.locked > 0)) {
-    // Insert USD at the beginning
+    // Insert USD at the beginning (no avgCost for USD)
     summary.unshift({
       asset: USD_ASSET,
       free: perpBalance.free,
@@ -247,13 +253,15 @@ export async function creditSpotBalance(
 /**
  * Credit spot balance by address only (when userId not available)
  * For USD, uses the main perp balance
+ * @param price - Optional price per unit for cost basis tracking
  */
 export async function creditSpotBalanceByAddress(
   address: string,
   asset: string,
   amount: number,
   reason: string,
-  referenceId?: string
+  referenceId?: string,
+  price?: number
 ): Promise<SpotBalanceOperationResult> {
   if (amount <= 0) {
     return { success: false, error: "Amount must be positive" };
@@ -262,7 +270,7 @@ export async function creditSpotBalanceByAddress(
   const normalizedAsset = asset.toUpperCase();
   const normalizedAddress = address.toLowerCase();
   
-  // USD uses the main perp balance
+  // USD uses the main perp balance (no cost basis tracking for USD)
   if (isUsdAsset(normalizedAsset)) {
     const result = await creditBalanceByAddress(address, amount, `[SPOT] ${reason}`, referenceId);
     if (!result.success) {
@@ -295,6 +303,8 @@ export async function creditSpotBalanceByAddress(
       locked: 0,
       totalCredits: 0,
       totalDebits: 0,
+      totalCostBasis: 0,
+      avgCost: 0,
       changes: [],
     });
   }
@@ -305,7 +315,23 @@ export async function creditSpotBalanceByAddress(
     reason,
     timestamp: new Date(),
     referenceId,
+    price,
   };
+  
+  // Update cost basis if price is provided (for buy trades)
+  if (price && price > 0) {
+    const currentTotal = balance.free + balance.locked;
+    const newCostBasis = (price * amount);
+    
+    // Update total cost basis
+    balance.totalCostBasis = (balance.totalCostBasis || 0) + newCostBasis;
+    
+    // Calculate new average cost
+    const newTotal = currentTotal + amount;
+    if (newTotal > 0) {
+      balance.avgCost = balance.totalCostBasis / newTotal;
+    }
+  }
   
   balance.free += amount;
   balance.totalCredits += amount;
@@ -612,8 +638,9 @@ export async function unlockSpotBalanceByAddress(
 
 /**
  * Execute a spot trade settlement (atomic debit/credit for both sides)
- * For a BUY: debit quote asset, credit base asset
- * For a SELL: debit base asset, credit quote asset
+ * For a BUY: debit quote asset, credit base asset (tracks avg cost)
+ * For a SELL: debit base asset, credit quote asset (reduces cost basis)
+ * @param price - Price per unit for cost basis tracking
  */
 export async function settleSpotTrade(
   address: string,
@@ -622,11 +649,15 @@ export async function settleSpotTrade(
   side: "buy" | "sell",
   baseAmount: number,
   quoteAmount: number,
-  referenceId: string
+  referenceId: string,
+  price?: number
 ): Promise<{ success: boolean; error?: string }> {
   const normalizedAddress = address.toLowerCase();
   const normalizedBaseAsset = baseAsset.toUpperCase();
   const normalizedQuoteAsset = quoteAsset.toUpperCase();
+  
+  // Calculate price if not provided
+  const tradePrice = price || (baseAmount > 0 ? quoteAmount / baseAmount : 0);
 
   if (side === "buy") {
     // Buying base asset: pay quote, receive base
@@ -643,13 +674,14 @@ export async function settleSpotTrade(
       return { success: false, error: debitResult.error };
     }
     
-    // Credit base asset
+    // Credit base asset (with price for cost basis tracking)
     const creditResult = await creditSpotBalanceByAddress(
       normalizedAddress,
       normalizedBaseAsset,
       baseAmount,
-      `Spot trade: bought ${baseAmount} ${normalizedBaseAsset}`,
-      referenceId
+      `Spot trade: bought ${baseAmount} ${normalizedBaseAsset} @ $${tradePrice.toFixed(2)}`,
+      referenceId,
+      tradePrice  // Pass price for avg cost calculation
     );
     
     if (!creditResult.success) {
@@ -665,25 +697,26 @@ export async function settleSpotTrade(
     }
   } else {
     // Selling base asset: pay base, receive quote
-    // Debit locked base asset (was locked when order placed)
+    // Debit locked base asset (was locked when order placed) - reduces cost basis
     const debitResult = await debitLockedSpotBalance(
       normalizedAddress,
       normalizedBaseAsset,
       baseAmount,
-      `Spot trade: sell ${baseAmount} ${normalizedBaseAsset}`,
-      referenceId
+      `Spot trade: sell ${baseAmount} ${normalizedBaseAsset} @ $${tradePrice.toFixed(2)}`,
+      referenceId,
+      true  // Flag to reduce cost basis proportionally
     );
     
     if (!debitResult.success) {
       return { success: false, error: debitResult.error };
     }
     
-    // Credit quote asset
+    // Credit quote asset (USD - no cost basis tracking needed)
     const creditResult = await creditSpotBalanceByAddress(
       normalizedAddress,
       normalizedQuoteAsset,
       quoteAmount,
-      `Spot trade: sold ${baseAmount} ${normalizedBaseAsset}`,
+      `Spot trade: sold ${baseAmount} ${normalizedBaseAsset} @ $${tradePrice.toFixed(2)}`,
       referenceId
     );
     
@@ -706,13 +739,15 @@ export async function settleSpotTrade(
 /**
  * Debit from locked balance (used during trade settlement)
  * For USD, uses the main perp balance
+ * @param reduceCostBasis - If true, reduce cost basis proportionally (for sells)
  */
 async function debitLockedSpotBalance(
   address: string,
   asset: string,
   amount: number,
   reason: string,
-  referenceId?: string
+  referenceId?: string,
+  reduceCostBasis: boolean = false
 ): Promise<SpotBalanceOperationResult> {
   if (amount <= 0) {
     return { success: false, error: "Amount must be positive" };
@@ -750,6 +785,26 @@ async function debitLockedSpotBalance(
     timestamp: new Date(),
     referenceId,
   };
+  
+  // Reduce cost basis proportionally when selling
+  if (reduceCostBasis && balance.totalCostBasis > 0) {
+    const totalBefore = balance.free + balance.locked;
+    if (totalBefore > 0) {
+      // Calculate the proportion being sold
+      const proportion = amount / totalBefore;
+      const costReduction = balance.totalCostBasis * proportion;
+      balance.totalCostBasis = Math.max(0, balance.totalCostBasis - costReduction);
+      
+      // Recalculate average cost
+      const totalAfter = totalBefore - amount;
+      if (totalAfter > 0) {
+        balance.avgCost = balance.totalCostBasis / totalAfter;
+      } else {
+        balance.avgCost = 0;
+        balance.totalCostBasis = 0;
+      }
+    }
+  }
   
   balance.locked -= amount;
   balance.totalDebits += amount;
