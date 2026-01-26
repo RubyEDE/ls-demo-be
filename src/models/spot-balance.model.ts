@@ -19,6 +19,7 @@ export interface ISpotBalance extends Document {
   totalDebits: number;
   totalCostBasis: number;   // Total cost of all purchases (for avg cost calc)
   avgCost: number;          // Average cost per unit
+  totalSold: number;        // Total units ever sold (for achievements)
   changes: ISpotBalanceChange[];
   createdAt: Date;
   updatedAt: Date;
@@ -96,6 +97,10 @@ const spotBalanceSchema = new Schema<ISpotBalance>(
       default: 0,
     },
     avgCost: {
+      type: Number,
+      default: 0,
+    },
+    totalSold: {
       type: Number,
       default: 0,
     },

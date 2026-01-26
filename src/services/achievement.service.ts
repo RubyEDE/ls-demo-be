@@ -478,6 +478,86 @@ const ACHIEVEMENT_DEFINITIONS: AchievementDefinition[] = [
     },
     isActive: true,
   },
+  // Spot trading achievements - Umbreon VMAX (progressive ownership chain)
+  {
+    id: "spot_umbreon_collector",
+    name: "Umbreon Collector",
+    description: "Own your first Umbreon VMAX card",
+    category: "spot",
+    icon: "sparkles",
+    points: 50,
+    isProgression: true,
+    progressionGroup: "umbreon_vmax_ownership",
+    progressionOrder: 1,
+    requirement: {
+      type: "umbreon_vmax_owned",
+      threshold: 1,
+    },
+    isActive: true,
+  },
+  {
+    id: "spot_umbreon_enthusiast",
+    name: "Umbreon Enthusiast",
+    description: "Own 3 Umbreon VMAX cards",
+    category: "spot",
+    icon: "star",
+    points: 75,
+    isProgression: true,
+    progressionGroup: "umbreon_vmax_ownership",
+    progressionOrder: 2,
+    requirement: {
+      type: "umbreon_vmax_owned",
+      threshold: 3,
+    },
+    isActive: true,
+  },
+  {
+    id: "spot_umbreon_whale",
+    name: "Umbreon Whale",
+    description: "Own 5 Umbreon VMAX cards",
+    category: "spot",
+    icon: "crown",
+    points: 150,
+    isProgression: true,
+    progressionGroup: "umbreon_vmax_ownership",
+    progressionOrder: 3,
+    requirement: {
+      type: "umbreon_vmax_owned",
+      threshold: 5,
+    },
+    isActive: true,
+  },
+  {
+    id: "spot_umbreon_hoarder",
+    name: "Umbreon Hoarder",
+    description: "Own 10 Umbreon VMAX cards",
+    category: "spot",
+    icon: "gem",
+    points: 300,
+    isProgression: true,
+    progressionGroup: "umbreon_vmax_ownership",
+    progressionOrder: 4,
+    requirement: {
+      type: "umbreon_vmax_owned",
+      threshold: 10,
+    },
+    isActive: true,
+  },
+  // Single sell achievement
+  {
+    id: "spot_umbreon_seller",
+    name: "Card Flipper",
+    description: "Sell an Umbreon VMAX card",
+    category: "spot",
+    icon: "banknote",
+    points: 25,
+    isProgression: false,
+    requirement: {
+      type: "umbreon_vmax_sold",
+      threshold: 1,
+    },
+    isActive: true,
+  },
 ];
 
 export interface AchievementUnlockResult {
@@ -834,6 +914,50 @@ export async function checkTalentAchievements(
     results.forEach(r => console.log(`   🏆 Unlocked: ${r.achievement.name}`));
   }
   return results;
+}
+
+/**
+ * Check spot trading achievements for Umbreon VMAX
+ * Call this after a spot trade is completed
+ * @param totalOwned - Total Umbreon VMAX currently owned (after trade)
+ * @param totalSold - Total Umbreon VMAX ever sold
+ */
+export async function checkSpotUmbreonAchievements(
+  userId: Types.ObjectId,
+  address: string,
+  totalOwned: number,
+  totalSold: number
+): Promise<AchievementUnlockResult[]> {
+  console.log(`🔍 Checking Umbreon VMAX achievements for ${address}: owned=${totalOwned}, sold=${totalSold}`);
+  const allNewAchievements: AchievementUnlockResult[] = [];
+  
+  // Check ownership achievements
+  if (totalOwned > 0) {
+    const ownedResults = await checkProgressionAchievements(
+      userId,
+      address,
+      "umbreon_vmax_owned",
+      totalOwned
+    );
+    allNewAchievements.push(...ownedResults);
+  }
+  
+  // Check selling achievements
+  if (totalSold > 0) {
+    const soldResults = await checkProgressionAchievements(
+      userId,
+      address,
+      "umbreon_vmax_sold",
+      totalSold
+    );
+    allNewAchievements.push(...soldResults);
+  }
+  
+  if (allNewAchievements.length > 0) {
+    allNewAchievements.forEach(r => console.log(`   🏆 Unlocked: ${r.achievement.name}`));
+  }
+  
+  return allNewAchievements;
 }
 
 /**

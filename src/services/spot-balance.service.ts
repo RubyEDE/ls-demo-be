@@ -9,6 +9,7 @@ import {
   debitBalanceByAddress,
   getBalanceByAddress,
 } from "./balance.service";
+import { checkSpotUmbreonAchievements } from "./achievement.service";
 
 // USD is special - it uses the main perp balance, not SpotBalance
 const USD_ASSET = "USD";
@@ -733,6 +734,34 @@ export async function settleSpotTrade(
     }
   }
   
+  // Check achievements for Umbreon VMAX trades
+  if (normalizedBaseAsset === "UMBREON-VMAX") {
+    try {
+      // Get updated balance to check achievements
+      const balance = await SpotBalance.findOne({
+        address: normalizedAddress,
+        asset: normalizedBaseAsset,
+      });
+      
+      if (balance) {
+        const totalOwned = balance.free + balance.locked;
+        const totalSold = balance.totalSold || 0;
+        
+        // Check achievements (async, don't block trade)
+        checkSpotUmbreonAchievements(
+          balance.userId,
+          normalizedAddress,
+          totalOwned,
+          totalSold
+        ).catch((err) => {
+          console.error("Error checking Umbreon achievements:", err);
+        });
+      }
+    } catch (err) {
+      console.error("Error checking spot achievements:", err);
+    }
+  }
+  
   return { success: true };
 }
 
@@ -787,21 +816,26 @@ async function debitLockedSpotBalance(
   };
   
   // Reduce cost basis proportionally when selling
-  if (reduceCostBasis && balance.totalCostBasis > 0) {
-    const totalBefore = balance.free + balance.locked;
-    if (totalBefore > 0) {
-      // Calculate the proportion being sold
-      const proportion = amount / totalBefore;
-      const costReduction = balance.totalCostBasis * proportion;
-      balance.totalCostBasis = Math.max(0, balance.totalCostBasis - costReduction);
-      
-      // Recalculate average cost
-      const totalAfter = totalBefore - amount;
-      if (totalAfter > 0) {
-        balance.avgCost = balance.totalCostBasis / totalAfter;
-      } else {
-        balance.avgCost = 0;
-        balance.totalCostBasis = 0;
+  if (reduceCostBasis) {
+    // Track total sold for achievements
+    balance.totalSold = (balance.totalSold || 0) + amount;
+    
+    if (balance.totalCostBasis > 0) {
+      const totalBefore = balance.free + balance.locked;
+      if (totalBefore > 0) {
+        // Calculate the proportion being sold
+        const proportion = amount / totalBefore;
+        const costReduction = balance.totalCostBasis * proportion;
+        balance.totalCostBasis = Math.max(0, balance.totalCostBasis - costReduction);
+        
+        // Recalculate average cost
+        const totalAfter = totalBefore - amount;
+        if (totalAfter > 0) {
+          balance.avgCost = balance.totalCostBasis / totalAfter;
+        } else {
+          balance.avgCost = 0;
+          balance.totalCostBasis = 0;
+        }
       }
     }
   }
