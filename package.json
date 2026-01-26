@@ -24,6 +24,7 @@
     "test:funding": "tsx src/test/funding.test.ts",
     "test:liquidation": "tsx src/test/liquidation.test.ts",
     "test:referrals": "tsx src/test/referrals.test.ts",
+    "test:spot": "tsx src/test/spot.test.ts",
     "test": "tsx src/test/auth.test.ts && tsx src/test/faucet.test.ts && tsx src/test/finnhub.test.ts"
   },
   "keywords": [
