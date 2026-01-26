@@ -25,6 +25,11 @@ import {
   getLiquidityStats,
   isMarketMakerRunning 
 } from "./services/light-market-maker.service";
+import {
+  initSpotMarketMaker,
+  startSpotMarketMaker,
+  getSpotMarketMakerStats,
+} from "./services/spot-market-maker.service";
 import { startAllSteamPricePolling, getConfiguredItems, getAllCachedPrices } from "./services/steam-oracle.service";
 
 const app = express();
@@ -112,6 +117,18 @@ async function start() {
   await initializeSpotCandles([
     { symbol: "UMBREON-VMAX-SPOT", targetPrice: 3400 },
   ]);
+  
+  // Initialize and start spot market maker (generates live trades for spot candles)
+  initSpotMarketMaker({
+    targetPrice: 3400,
+    tradeIntervalMs: 3000,      // Generate trades every 3 seconds
+    minTradesPerInterval: 1,
+    maxTradesPerInterval: 3,
+    minTradeSize: 0.1,
+    maxTradeSize: 1.0,
+    numAccounts: 100,
+  });
+  startSpotMarketMaker();
   
   // Start liquidation engine (checks every second)
   startLiquidationEngine(1000);
